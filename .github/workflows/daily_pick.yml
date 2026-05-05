@@ -1,0 +1,68 @@
+name: Daily Pre-Surge Pick
+
+on:
+  schedule:
+    - cron: "0 0 * * *"        # 00:00 UTC = 09:00 KST
+  workflow_dispatch:
+    inputs:
+      skip:
+        description: "stages to skip (csv)"
+        required: false
+        default: ""
+
+concurrency:
+  group: daily-pick
+  cancel-in-progress: false
+
+jobs:
+  daily-pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      DATABASE_URL: sqlite:///data/presurge.db
+      TOSS_TOP30_TICKERS: ${{ secrets.TOSS_TOP30_TICKERS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install feedparser
+
+      - name: Restore DB cache
+        uses: actions/cache@v4
+        with:
+          path: data/presurge.db
+          key: presurge-db-${{ github.run_id }}
+          restore-keys: |
+            presurge-db-
+
+      - name: Initialize schema
+        run: python -m src.storage.db --init
+
+      - name: Run daily picker
+        run: python -m src.runner --mode=daily --skip "${{ github.event.inputs.skip }}"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-${{ github.run_id }}
+          path: |
+            data/presurge.db
+            logs/
+          retention-days: 30
+          if-no-files-found: ignore

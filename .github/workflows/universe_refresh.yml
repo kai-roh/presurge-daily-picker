@@ -1,0 +1,32 @@
+name: Universe Refresh
+
+on:
+  schedule:
+    - cron: "0 6 * * 0"        # 일요일 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: universe-refresh
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+      DATABASE_URL: sqlite:///data/presurge.db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m src.storage.db --init
+      - run: python -m scripts.bootstrap_universe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: universe-${{ github.run_id }}
+          path: data/presurge.db
+          retention-days: 14

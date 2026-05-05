@@ -1,0 +1,25 @@
+[{{ run_date }} Pre-Surge Watchlist]
+
+🟢 Tier 1 (강력 후보, PSS ≥ 70 + 패턴 2개+)
+{% if tier1 %}{% for s in tier1 %}
+{{ loop.index }}. {{ s.ticker }} (PSS {{ "%.0f"|format(s.pss_total) }}) - 패턴: {{ s.triggered_patterns|join("+") }}
+   {{ s.summary or "데이터 부족 — Claude 리포트 보강 대기" }}
+{% endfor %}{% else %}
+   해당 종목 없음. 진입 보류.
+{% endif %}
+
+🟡 Tier 2 (관찰)
+{% if tier2 %}{% for s in tier2 %}
+- {{ s.ticker }} (PSS {{ "%.0f"|format(s.pss_total) }}) — 패턴 {{ s.triggered_patterns|join(",") }}
+{% endfor %}{% else %}
+- 없음
+{% endif %}
+
+⚪ Tier 3 (모니터)
+{% if tier3 %}{% for s in tier3 %}
+- {{ s.ticker }} ({{ "%.0f"|format(s.pss_total) }})
+{% endfor %}{% else %}
+- 없음
+{% endif %}
+
+면책: 본 watchlist는 사전 신호 도구. 최종 진입 결정은 본인 판단. 진입 트리거(RVOL 2x+, VWAP 상회, 카탈리스트 ≤ 72h) 정렬 시에만 매수.
