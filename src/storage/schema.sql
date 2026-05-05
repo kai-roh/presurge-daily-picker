@@ -74,6 +74,17 @@ CREATE TABLE IF NOT EXISTS toss_top_volume (
 );
 CREATE INDEX IF NOT EXISTS idx_toss_ticker ON toss_top_volume(ticker, rank_date);
 
+CREATE TABLE IF NOT EXISTS index_inclusion_events (
+    event_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker        TEXT NOT NULL,
+    index_name    TEXT NOT NULL,         -- "Russell 2000", "MEME ETF", ...
+    announced_at  TEXT,                  -- ISO date
+    effective_at  TEXT,                  -- ISO date (실제 편입일)
+    source        TEXT,                  -- 'ftse_russell' | 'roundhill' | manual
+    notes         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_index_events_ticker ON index_inclusion_events(ticker, effective_at);
+
 CREATE TABLE IF NOT EXISTS pss_scores (
     score_date         TEXT NOT NULL,
     ticker             TEXT NOT NULL,

@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
+def _parse_date(s: str | None) -> date | None:
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s[:10])
+    except ValueError:
+        return None
+
+
 def _resolve_db_path(url: str) -> Path:
     if url.startswith("sqlite:///"):
         return Path(url.removeprefix("sqlite:///")).resolve()
@@ -295,6 +304,47 @@ class Database:
             (ticker, start, as_of.isoformat()),
         ).fetchone()
         return row is not None
+
+    # ------------------------------------------------------------------
+    # Index inclusion events
+    # ------------------------------------------------------------------
+    def upsert_index_event(self, row: dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO index_inclusion_events(ticker, index_name, announced_at, effective_at, source, notes)
+            VALUES (:ticker, :index_name, :announced_at, :effective_at, :source, :notes)
+            """,
+            row,
+        )
+
+    def index_inclusion_events(self, ticker: str, as_of: date) -> list[dict[str, Any]]:
+        """Pattern B 헬퍼. announced_at <= as_of, effective_at >= as_of - 7d 인 이벤트만."""
+        cutoff = (as_of - timedelta(days=7)).isoformat()
+        rows = self.conn.execute(
+            """
+            SELECT ticker, index_name, announced_at, effective_at, source
+            FROM index_inclusion_events
+            WHERE ticker = ?
+              AND (announced_at IS NULL OR announced_at <= ?)
+              AND (effective_at IS NULL OR effective_at >= ?)
+            """,
+            (ticker, as_of.isoformat(), cutoff),
+        ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "ticker": r["ticker"],
+                "index_name": r["index_name"],
+                "announced_at": _parse_date(r["announced_at"]),
+                "effective_at": _parse_date(r["effective_at"]),
+                "source": r["source"],
+            })
+        return out
+
+    def has_earnings_within(self, ticker: str, as_of: date, days: int) -> bool:
+        """earnings 캘린더는 v0.3 Finnhub 적재. MVP에서는 항상 False."""
+        _ = (ticker, as_of, days)
+        return False
 
     # ------------------------------------------------------------------
     # PSS scores
