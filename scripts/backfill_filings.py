@@ -19,10 +19,24 @@ import argparse
 import logging
 import sys
 import time
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
+
+# efts hits._source.display_names 포맷:
+#   "ESSENTIAL PROPERTIES REALTY TRUST, INC.  (EPRT)  (CIK 0001728951)"
+#   "GLADSTONE LAND Corp  (LAND, LANDO, LANDP)  (CIK 0001495240)"
+# (TICKER[, TICKER, ...]) 직후 (CIK NNNN) 가 붙는 패턴.
+_TICKER_GROUP_RE = re.compile(r"\(([^)]+)\)\s*\(CIK\s*\d+\)")
+
+
+def extract_tickers_from_display_name(display_name: str) -> list[str]:
+    m = _TICKER_GROUP_RE.search(display_name or "")
+    if not m:
+        return []
+    return [t.strip() for t in m.group(1).split(",") if t.strip()]
 
 from dotenv import load_dotenv
 
@@ -46,8 +60,8 @@ class FilingMeta:
     body_url: str
 
 
-def iter_filings(http: HttpClient, start: date, end: date) -> Iterator[dict[str, Any]]:
-    """EDGAR full-text search 페이지네이션. forms=8-K, daterange=custom."""
+def _iter_chunk(http: HttpClient, start: date, end: date) -> Iterator[dict[str, Any]]:
+    """단일 (start, end) 구간의 efts 검색 결과 페이지네이션."""
     page_from = 0
     while True:
         params = {
@@ -58,16 +72,47 @@ def iter_filings(http: HttpClient, start: date, end: date) -> Iterator[dict[str,
             "enddt": end.isoformat(),
             "from": str(page_from),
         }
-        resp = http.get(EDGAR_FULL_TEXT_API, params=params)
+        try:
+            resp = http.get(EDGAR_FULL_TEXT_API, params=params)
+        except Exception as exc:
+            # efts는 깊은 페이지네이션에서 500 빈발 → 해당 chunk 종료
+            logger.warning(
+                "efts page failed at %s..%s from=%d: %s — chunk truncated",
+                start, end, page_from, exc,
+            )
+            return
         body = resp.json()
         hits = body.get("hits", {}).get("hits", []) or []
         if not hits:
             return
         yield from hits
         page_from += len(hits)
-        if page_from >= body.get("hits", {}).get("total", {}).get("value", 0):
+        total = body.get("hits", {}).get("total", {}).get("value", 0) or 0
+        if page_from >= total:
             return
-        time.sleep(0.1)  # 추가 안전 sleep
+        # efts는 from>=1000 부근에서 cursor depth 제한으로 500 → 보호적으로 break
+        if page_from >= 900:
+            logger.warning(
+                "efts depth guard %s..%s: stopping at from=%d (total=%d), shrink window",
+                start, end, page_from, total,
+            )
+            return
+        time.sleep(0.1)
+
+
+def iter_filings(http: HttpClient, start: date, end: date) -> Iterator[dict[str, Any]]:
+    """EDGAR full-text search 페이지네이션. efts depth 제한 회피용 주별 chunk.
+
+    efts는 form=8-K + 24개월 query에서 ~100k건 매칭되며 from>=1000 부근에서 500.
+    5일 chunk로 자르면 chunk당 평균 ~700건 → 깊이 한도 여유 있게 안.
+    """
+    chunk_days = 5
+    cur = start
+    while cur <= end:
+        chunk_end = min(cur + timedelta(days=chunk_days - 1), end)
+        logger.info("efts chunk %s..%s", cur, chunk_end)
+        yield from _iter_chunk(http, cur, chunk_end)
+        cur = chunk_end + timedelta(days=1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -105,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
         for hit in iter_filings(http, start, end):
             src = hit.get("_source") or {}
             tickers = src.get("tickers") or []
+            if not tickers:
+                # 현 efts schema는 tickers=null. display_names에서 파싱
+                for dn in src.get("display_names") or []:
+                    tickers.extend(extract_tickers_from_display_name(dn))
             ticker = next((t for t in tickers if t in universe_set), None)
             if not ticker:
                 continue
