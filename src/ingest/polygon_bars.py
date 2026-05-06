@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from src.config import POLYGON_RPS
+from src.config import POLYGON_PERIOD_SECONDS, POLYGON_RPS
 from src.ingest._http import HttpClient
 
 logger = logging.getLogger(__name__)
@@ -19,9 +19,16 @@ BASE_URL = "https://api.polygon.io"
 
 
 class PolygonBars:
-    def __init__(self, api_key: str):
+    def __init__(
+        self,
+        api_key: str,
+        rps: int = POLYGON_RPS,
+        period_seconds: float = POLYGON_PERIOD_SECONDS,
+    ):
         self.api_key = api_key
-        self.http = HttpClient(base_url=BASE_URL, rps=POLYGON_RPS)
+        self.http = HttpClient(
+            base_url=BASE_URL, rps=rps, period_seconds=period_seconds
+        )
 
     def grouped_daily(self, trade_date: date, adjusted: bool = True) -> list[dict[str, Any]]:
         """미국 주식 시장 전체 종가. 주말/휴일은 빈 결과."""

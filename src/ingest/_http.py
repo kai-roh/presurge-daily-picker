@@ -52,6 +52,7 @@ class HttpClient:
         rps: int = 5,
         timeout: float = 30.0,
         follow_redirects: bool = False,
+        period_seconds: float = 1.0,
     ) -> None:
         self.client = httpx.Client(
             base_url=base_url,
@@ -59,7 +60,7 @@ class HttpClient:
             timeout=timeout,
             follow_redirects=follow_redirects,
         )
-        self.limiter = RateLimiter(rps)
+        self.limiter = RateLimiter(rps, period_seconds=period_seconds)
 
     @_RETRY
     def get(self, url: str, **kwargs: Any) -> httpx.Response:

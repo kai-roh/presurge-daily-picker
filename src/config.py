@@ -121,10 +121,11 @@ WEEKLY_DRAWDOWN_HALT = -0.05
 # API rate limits
 # ---------------------------------------------------------------------------
 SEC_RPS = 10
-# Polygon Stocks Starter ($29/월) 기준 5 RPS. 무료 티어는 5/min이라 grouped daily(일 1콜)는
-# OK이지만 universe details enrichment(/v3/reference/tickers/{T})는 무료 티어에서 즉시 429.
-# 따라서 W3 universe bootstrap은 Finnhub 경로(/stock/symbol + /stock/profile2)로 우회.
+# Polygon — 현재 키는 무료 티어이므로 5 calls / **60s** 로 한정. Stocks Starter
+# ($29/월) 업그레이드 시 POLYGON_PERIOD_SECONDS=1 로 바꾸면 5 RPS unlimited.
+# universe details enrichment(/v3/reference/tickers/{T})는 무료 티어에서 비현실 → Finnhub 우회 사용.
 POLYGON_RPS = 5
+POLYGON_PERIOD_SECONDS = 60.0
 # Finnhub free tier: 60 calls/min steady → rps=1.
 FINNHUB_RPS = 1
 STOCKTWITS_RPH = 200
