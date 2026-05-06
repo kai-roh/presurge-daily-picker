@@ -114,6 +114,14 @@ class Database:
         ).fetchall()
         return [r["ticker"] for r in rows]
 
+    def universe_refreshed_on(self, iso_date: str) -> set[str]:
+        """Tickers whose last_refreshed timestamp falls on the given UTC date (YYYY-MM-DD)."""
+        rows = self.conn.execute(
+            "SELECT ticker FROM universe WHERE substr(last_refreshed, 1, 10) = ?",
+            (iso_date,),
+        ).fetchall()
+        return {r["ticker"] for r in rows}
+
     # ------------------------------------------------------------------
     # daily bars
     # ------------------------------------------------------------------
