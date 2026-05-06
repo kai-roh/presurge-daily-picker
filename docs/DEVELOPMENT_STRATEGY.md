@@ -593,25 +593,31 @@ def compute_pss(ticker, as_of, db) -> dict:
 - 동일 (ticker, date) 재요청 금지 → DB SELECT 후 missing만 호출
 - universe 재구성 후 historical 일괄 backfill 별도 스크립트
 
-**플랜 권한 매트릭스 (2026-05-07 키 검증)**:
+**플랜 권한 매트릭스 (2026-05-07 현재 키 검증)**:
 
-| Endpoint | Stocks Starter | 용도 |
+| Endpoint | 현재 키 (무료 티어) | Stocks Starter $29/월 |
 |---|---|---|
-| `GET /v3/reference/tickers` (list) | OK, 단 `market_cap=null` | universe 후보 페이지네이션 |
-| `GET /v3/reference/tickers/{T}` (details) | OK, `market_cap`/shares 포함 | 종목별 시총 enrichment |
-| `GET /v2/aggs/grouped/locale/us/.../{date}` | OK (~12k row/day) | 어제 종가 일괄 |
-| `GET /v2/snapshot/locale/us/markets/stocks/tickers` | NOT_AUTHORIZED | (상위 플랜 전용) |
+| `GET /v3/reference/tickers` (list) | OK, `market_cap=null`, **5/min 한도** | OK + 5 RPS |
+| `GET /v3/reference/tickers/{T}` (details) | OK, **5/min 한도** | OK + 5 RPS |
+| `GET /v2/aggs/grouped/locale/us/.../{date}` | OK (~12k row/day) | OK + 5 RPS |
+| `GET /v2/snapshot/locale/us/markets/stocks/tickers` | NOT_AUTHORIZED | OK |
 
-**Universe Bootstrap 2단계 fetch (`scripts/bootstrap_universe.py`)**:
-list endpoint가 `market_cap`을 반환하지 않으므로:
-1. **Stage 1** — list 페이지네이션 + `type ∈ {CS, ADRC}` + 미국 거래소(XNAS/XNYS/XASE/ARCX/BATS) 1차 필터 (mcap 의존 X)
-2. **Stage 2** — 살아남은 후보 각각 details 호출해 `market_cap` + `share_class_shares_outstanding` 획득 → `[MARKET_CAP_MIN_USD, MARKET_CAP_MAX_USD]` 필터 후 upsert
+**현재 키는 무료 티어** → universe enrichment에 details ~6k콜이 필요해 plan 업그레이드 또는 우회가 필요. v0.2 MVP는 비용 0을 위해 **Finnhub 우회 채택**. Polygon은 grouped daily 1콜만 쓰는 daily_pick 경로에 그대로 사용.
+
+**Universe Bootstrap — Finnhub 경로 (`scripts/bootstrap_universe.py`)**:
+1. **Stage 1** — `GET /stock/symbol?exchange=US` (1콜) → `type ∈ {Common Stock, ADR}` + `mic ∈ {XNAS, XNYS, XASE, ARCX, BATS}` 1차 필터. ~5,200 후보.
+2. **Stage 2** — 후보별 `GET /stock/profile2?symbol=X` → `marketCapitalization` (백만 USD 단위) × 1e6 → `[MARKET_CAP_MIN_USD, MARKET_CAP_MAX_USD]` 필터 후 upsert.
+
+**Finnhub 응답 단위 주의**:
+- `marketCapitalization`: **백만 USD** (예: BNAI 132.5 = $132.5M)
+- `shareOutstanding`: **백만 주**
 
 특성:
 - `--checkpoint-every N` 단위 부분 commit으로 크래시/중단 회복
-- 같은 UTC 날짜에 이미 `last_refreshed`된 ticker는 details 재호출 스킵 (`--force`로 우회)
-- `--limit N`은 Stage 1 후보 N개까지만 details 호출 (smoke test용)
-- 예상 소요: Stage 1 후보 ~6~8k × 5 RPS = 약 20~30분 (1회성 부트스트랩)
+- 같은 UTC 날짜에 이미 `last_refreshed`된 ticker는 enrichment 재호출 스킵 (`--force`로 우회)
+- `--limit N`은 Stage 1 후보 N개까지만 enrichment (smoke test용)
+- 예상 소요: 후보 ~5,200 × Finnhub 60/min = **약 90분** (1회성 부트스트랩)
+- Polygon Stocks Starter로 업그레이드하면 Polygon details 5 RPS = 약 18분으로 단축 가능 (W4 시점에 비용 대비 alpha 검증 후 재평가)
 
 ### 5.3 Ortex Short Interest (`src/ingest/ortex_si.py`)
 

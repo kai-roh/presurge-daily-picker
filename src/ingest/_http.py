@@ -51,8 +51,14 @@ class HttpClient:
         headers: dict[str, str] | None = None,
         rps: int = 5,
         timeout: float = 30.0,
+        follow_redirects: bool = False,
     ) -> None:
-        self.client = httpx.Client(base_url=base_url, headers=headers or {}, timeout=timeout)
+        self.client = httpx.Client(
+            base_url=base_url,
+            headers=headers or {},
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+        )
         self.limiter = RateLimiter(rps)
 
     @_RETRY
