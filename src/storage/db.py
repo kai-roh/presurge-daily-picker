@@ -44,7 +44,11 @@ class Database:
     @property
     def conn(self) -> sqlite3.Connection:
         if self._conn is None:
-            self._conn = sqlite3.connect(self.path, isolation_level=None)
+            # check_same_thread=False — 멀티스레드 워커가 같은 connection을 쓸 수
+            # 있도록 허용. 쓰기 직렬화는 호출자가 lock으로 책임.
+            self._conn = sqlite3.connect(
+                self.path, isolation_level=None, check_same_thread=False
+            )
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")

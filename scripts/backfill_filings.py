@@ -104,9 +104,9 @@ def iter_filings(http: HttpClient, start: date, end: date) -> Iterator[dict[str,
     """EDGAR full-text search 페이지네이션. efts depth 제한 회피용 주별 chunk.
 
     efts는 form=8-K + 24개월 query에서 ~100k건 매칭되며 from>=1000 부근에서 500.
-    5일 chunk로 자르면 chunk당 평균 ~700건 → 깊이 한도 여유 있게 안.
+    피크 (earnings season) 시 540 hits/day 까지 관측 → 1일 chunk가 안전.
     """
-    chunk_days = 5
+    chunk_days = 1
     cur = start
     while cur <= end:
         chunk_end = min(cur + timedelta(days=chunk_days - 1), end)

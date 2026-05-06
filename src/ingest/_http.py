@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import deque
 from typing import Any
@@ -18,22 +19,28 @@ logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """간단한 sliding window 리미터. 단일 프로세스 가정."""
+    """간단한 sliding window 리미터. 멀티 스레드 안전."""
 
     def __init__(self, requests_per_period: int, period_seconds: float = 1.0):
         self.rps = requests_per_period
         self.period = period_seconds
         self._calls: deque[float] = deque()
+        self._lock = threading.Lock()
 
     def acquire(self) -> None:
-        now = time.monotonic()
-        while self._calls and now - self._calls[0] > self.period:
-            self._calls.popleft()
-        if len(self._calls) >= self.rps:
-            sleep_for = self.period - (now - self._calls[0]) + 0.001
+        with self._lock:
+            now = time.monotonic()
+            while self._calls and now - self._calls[0] > self.period:
+                self._calls.popleft()
+            if len(self._calls) >= self.rps:
+                sleep_for = self.period - (now - self._calls[0]) + 0.001
+            else:
+                sleep_for = 0.0
+            # 슬립은 lock 밖에서? — 다른 thread가 동시에 acquire 시 race 가능.
+            # 단순화: lock 안에서 sleep. 처리량 약간 저하되지만 정확함.
             if sleep_for > 0:
                 time.sleep(sleep_for)
-        self._calls.append(time.monotonic())
+            self._calls.append(time.monotonic())
 
 
 _RETRY = retry(
