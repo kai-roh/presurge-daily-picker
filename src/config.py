@@ -15,27 +15,27 @@ MARKET_CAP_MIN_USD = 20_000_000
 MARKET_CAP_MAX_USD = 10_000_000_000
 
 # ---------------------------------------------------------------------------
-# PSS Tier 임계치
+# PSS Tier 임계치 (ENV override 가능, W4 weight tuning 시 사용)
 # ---------------------------------------------------------------------------
-TIER1_PSS_MIN = 70.0
-TIER1_PATTERNS_MIN = 2
+TIER1_PSS_MIN = float(os.environ.get("TIER1_PSS_MIN_OVERRIDE", 70.0))
+TIER1_PATTERNS_MIN = int(os.environ.get("TIER1_PATTERNS_MIN_OVERRIDE", 2))
 TIER1_MAX_TICKERS = 3
 
-TIER2_PSS_MIN = 50.0
+TIER2_PSS_MIN = float(os.environ.get("TIER2_PSS_MIN_OVERRIDE", 50.0))
 TIER2_MAX_TICKERS = 5
 
-TIER3_PSS_MIN = 30.0
+TIER3_PSS_MIN = float(os.environ.get("TIER3_PSS_MIN_OVERRIDE", 30.0))
 TIER3_MAX_TICKERS = 10
 
 # ---------------------------------------------------------------------------
-# 패턴 max_score (W4 튜닝 후 갱신)
+# 패턴 max_score (W4 튜닝 후 갱신, ENV override 지원)
 # ---------------------------------------------------------------------------
-PATTERN_A_MAX = 30.0  # Dilution shutdown
-PATTERN_B_MAX = 25.0  # Index inclusion
-PATTERN_C_MAX = 50.0  # Government / tier-1 contract
-PATTERN_D_MAX = 30.0  # Short squeeze setup
-PATTERN_E_MAX = 25.0  # Brand penny
-PATTERN_F_MAX = 25.0  # Megatheme
+PATTERN_A_MAX = float(os.environ.get("PATTERN_A_MAX_OVERRIDE", 30.0))
+PATTERN_B_MAX = float(os.environ.get("PATTERN_B_MAX_OVERRIDE", 25.0))
+PATTERN_C_MAX = float(os.environ.get("PATTERN_C_MAX_OVERRIDE", 50.0))
+PATTERN_D_MAX = float(os.environ.get("PATTERN_D_MAX_OVERRIDE", 30.0))
+PATTERN_E_MAX = float(os.environ.get("PATTERN_E_MAX_OVERRIDE", 25.0))
+PATTERN_F_MAX = float(os.environ.get("PATTERN_F_MAX_OVERRIDE", 25.0))
 
 # ---------------------------------------------------------------------------
 # 보너스 / 페널티
