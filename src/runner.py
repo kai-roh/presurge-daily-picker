@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import subprocess
 import sys
 from datetime import UTC, date, datetime
 
@@ -106,6 +108,43 @@ def step_ingest_toss(db: Database) -> int:
     return len(rows)
 
 
+def step_classify_new_filings(settings: Settings) -> int:
+    """미분류 1.01/1.02 8-K filing을 Claude로 분류.
+
+    daily run 시 신규로 들어온 8-K 메타에 패턴 분류를 채워넣어 PSS 계산이 정상 작동하게.
+    1일 cap $5 (실제 일평균 1~10건이라 $0.01~0.05 수준).
+    """
+    if not settings.anthropic_api_key:
+        logger.info("ANTHROPIC_API_KEY missing; skipping classify")
+        return 0
+    cmd = [
+        sys.executable,
+        "-m",
+        "scripts.classify_filings",
+        "--workers", "2",
+        "--max-cost-usd", "5",
+        "--checkpoint-every", "20",
+    ]
+    proc = subprocess.run(
+        cmd, env=os.environ.copy(), capture_output=True, text=True, cwd=os.getcwd()
+    )
+    if proc.returncode != 0:
+        logger.warning("classify subprocess failed (rc=%d): %s",
+                        proc.returncode, proc.stderr[-300:])
+        return 0
+    # stderr 로 logging이 흘러가니 거기서 classified count 추출
+    out = proc.stderr or ""
+    for line in out.splitlines()[::-1]:
+        if "Done in" in line and "classified=" in line:
+            # 예: "Done in 9s. classified=8, no_body=0, fail=0, est_cost=$0.02"
+            try:
+                n = int(line.split("classified=")[1].split(",")[0])
+                return n
+            except (IndexError, ValueError):
+                pass
+    return 0
+
+
 def step_score(db: Database, as_of: date) -> tuple[list, dict]:
     scores = pss_aggregator.compute_universe(as_of, db)
     pss_aggregator.persist(scores, as_of, db)
@@ -177,39 +216,44 @@ def _score_to_dict(s) -> dict:
     }
 
 
+def _alert(settings: Settings, message: str) -> None:
+    """치명적 에러를 별도 alert chat으로 푸시. 실패해도 main run에 영향 없음."""
+    chat_id = settings.telegram_alert_chat_id or settings.telegram_chat_id
+    if not settings.telegram_bot_token or not chat_id:
+        return
+    try:
+        TelegramPusher(
+            bot_token=settings.telegram_bot_token,
+            chat_id=chat_id,
+            dry_run=settings.dry_run,
+        ).send(message, parse_mode="HTML")
+    except Exception as exc:
+        logger.warning("alert push failed: %s", exc)
+
+
 def run_daily(settings: Settings, *, skip: set[str] | None = None) -> int:
     skip = skip or set()
     db = get_db(settings.database_url)
     as_of = date.today()
     logger.info("=== Daily run %s ===", as_of)
 
-    if "filings" not in skip:
-        try:
-            n = step_ingest_filings(db, settings)
-            logger.info("filings upserted: %d", n)
-        except Exception as exc:
-            logger.exception("filings ingest failed: %s", exc)
+    errors: list[str] = []
 
-    if "bars" not in skip:
+    def _stage(name: str, fn) -> None:
+        if name in skip:
+            return
         try:
-            n = step_ingest_bars(db, settings)
-            logger.info("bars upserted: %d", n)
+            n = fn()
+            logger.info("%s done: %s", name, n)
         except Exception as exc:
-            logger.exception("bars ingest failed: %s", exc)
+            logger.exception("%s failed: %s", name, exc)
+            errors.append(f"{name}: {type(exc).__name__}: {str(exc)[:120]}")
 
-    if "reddit" not in skip:
-        try:
-            n = step_ingest_reddit(db)
-            logger.info("reddit upserted: %d", n)
-        except Exception as exc:
-            logger.exception("reddit ingest failed: %s", exc)
-
-    if "toss" not in skip:
-        try:
-            n = step_ingest_toss(db)
-            logger.info("toss upserted: %d", n)
-        except Exception as exc:
-            logger.exception("toss ingest failed: %s", exc)
+    _stage("filings", lambda: step_ingest_filings(db, settings))
+    _stage("classify", lambda: step_classify_new_filings(settings))
+    _stage("bars", lambda: step_ingest_bars(db, settings))
+    _stage("reddit", lambda: step_ingest_reddit(db))
+    _stage("toss", lambda: step_ingest_toss(db))
 
     scores, tiers = step_score(db, as_of)
 
@@ -220,20 +264,33 @@ def run_daily(settings: Settings, *, skip: set[str] | None = None) -> int:
             try:
                 n = step_ingest_stocktwits(db, candidate_tickers)
                 logger.info("stocktwits upserted: %d", n)
+                # stocktwits 후 점수 재계산 (Pattern F mention growth 가 영향 받음)
+                scores, tiers = step_score(db, as_of)
             except Exception as exc:
                 logger.exception("stocktwits failed: %s", exc)
+                errors.append(f"stocktwits: {type(exc).__name__}")
 
     report_md = step_report(db, settings, as_of, tiers)
     logger.info("Report generated (%d chars)", len(report_md))
 
+    push_ok = True
     if "push" not in skip:
         try:
             step_push(settings, db, as_of, report_md)
         except Exception as exc:
             logger.exception("push failed: %s", exc)
-            return 1
+            errors.append(f"push: {type(exc).__name__}")
+            push_ok = False
 
-    return 0
+    if errors:
+        msg = (
+            f"Daily run {as_of} 부분 실패\n"
+            f"errors:\n- " + "\n- ".join(errors) + "\n"
+            f"watchlist Tier1={len(tiers[1])} Tier2={len(tiers[2])}"
+        )
+        _alert(settings, msg)
+
+    return 0 if push_ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:

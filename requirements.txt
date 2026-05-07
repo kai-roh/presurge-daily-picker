@@ -7,3 +7,7 @@ jinja2>=3.1.4
 python-dotenv>=1.0.1
 pandas>=2.2.0
 scipy>=1.13.0
+feedparser>=6.0.11
+yfinance>=0.2.40
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
