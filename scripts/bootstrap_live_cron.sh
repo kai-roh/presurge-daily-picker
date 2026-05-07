@@ -38,13 +38,14 @@ echo "[1/3] GitHub Actions secrets 설정"
 set_secret() {
   local key="$1"
   local val
-  val=$(grep -E "^${key}=" .env | head -1 | cut -d= -f2- | sed 's/^"//; s/"$//' || true)
+  # cut으로 등호 이후 추출 → quote 제거 → leading/trailing whitespace 제거
+  val=$(grep -E "^${key}=" .env | head -1 | cut -d= -f2- | sed 's/^"//; s/"$//' | awk '{$1=$1};1' || true)
   if [ -z "${val:-}" ]; then
     echo "  ⊘ $key  (.env에 없음, 스킵)"
     return 0
   fi
   printf '%s' "$val" | gh secret set "$key" --body -
-  echo "  ✓ $key"
+  echo "  ✓ $key (len=${#val})"
 }
 
 for k in POLYGON_API_KEY ANTHROPIC_API_KEY FINNHUB_API_KEY \
