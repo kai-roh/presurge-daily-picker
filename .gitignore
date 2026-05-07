@@ -18,6 +18,7 @@ env/
 *.sqlite3
 data/*.db
 data/historical/
+data/cache/
 
 .coverage
 htmlcov/
