@@ -282,6 +282,24 @@ def run_daily(settings: Settings, *, skip: set[str] | None = None) -> int:
             errors.append(f"push: {type(exc).__name__}")
             push_ok = False
 
+    # 어제/그저께 watchlist의 1d/2d/3d 후 가격을 trade_log에 누적 (forward 학습 데이터)
+    if "trade_update" not in skip:
+        try:
+            from scripts.update_trade_log import process_watchlist_run
+
+            today_d = as_of
+            for offset in (1, 2, 3):
+                back_date = _shift_business_days(today_d, -offset)
+                r = process_watchlist_run(db, back_date)
+                if r.get("updated"):
+                    logger.info(
+                        "trade_log forward update %s: updated=%d skipped=%d horizons=%s",
+                        back_date, r["updated"], r["skipped"], r.get("horizons"),
+                    )
+        except Exception as exc:
+            logger.exception("trade_log update failed: %s", exc)
+            errors.append(f"trade_update: {type(exc).__name__}")
+
     if errors:
         msg = (
             f"Daily run {as_of} 부분 실패\n"
@@ -291,6 +309,19 @@ def run_daily(settings: Settings, *, skip: set[str] | None = None) -> int:
         _alert(settings, msg)
 
     return 0 if push_ok else 1
+
+
+def _shift_business_days(d: date, offset: int) -> date:
+    """offset 만큼 영업일 이동 (음수 = 과거)."""
+    from datetime import timedelta
+    cur = d
+    step = 1 if offset > 0 else -1
+    moved = 0
+    while moved < abs(offset):
+        cur += timedelta(days=step)
+        if cur.weekday() < 5:
+            moved += 1
+    return cur
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -102,10 +102,67 @@ def h4_spearman(
     )
 
 
+def h1_short_intraday_hit_rate(
+    result: BacktestResult, hold_days: int = 1, threshold: float = 0.10,
+    hit_rate_floor: float = 0.30,
+) -> HypothesisVerdict:
+    """초단타 가설: pick 후 T+1~T+hold_days 일중 high가 +10% 이상 도달율.
+
+    daily picker 의 본질이 짧은 급등 포착이라면 close 5d보다 high 1-3d가 더 정확한
+    alpha 측정. Tier 1/2/3 전체 trades 대상.
+    """
+    rows = result.trades
+    if not rows:
+        return HypothesisVerdict(
+            f"H1' high-{hold_days}d ≥+{threshold:.0%} hit-rate",
+            0.0, hit_rate_floor, False, 0,
+        )
+    hits = sum(1 for r in rows if hold_days in r.high_exits and r.high_exits[hold_days] >= threshold)
+    rate = hits / len(rows)
+    return HypothesisVerdict(
+        name=f"H1' high-{hold_days}d ≥+{threshold:.0%} hit-rate (all tiers)",
+        measured=rate,
+        threshold=hit_rate_floor,
+        passed=rate >= hit_rate_floor,
+        sample_size=len(rows),
+    )
+
+
+def h4_short_spearman(
+    result: BacktestResult, hold_days: int = 1, floor: float = 0.20,
+) -> HypothesisVerdict:
+    """초단타 PSS-수익 상관 (high 기반). hold_days 짧게."""
+    try:
+        from scipy.stats import spearmanr  # type: ignore[import-untyped]
+    except ImportError:
+        return HypothesisVerdict(
+            f"H4' PSS-high{hold_days}d Spearman", 0.0, floor, False, 0, "scipy not installed"
+        )
+    rows = [t for t in result.trades if hold_days in t.high_exits]
+    if len(rows) < 30:
+        return HypothesisVerdict(
+            f"H4' PSS-high{hold_days}d Spearman", 0.0, floor, False, len(rows), "insufficient samples"
+        )
+    pss = [t.pss_total for t in rows]
+    rets = [t.high_exits[hold_days] for t in rows]
+    rho, _p = spearmanr(pss, rets)
+    return HypothesisVerdict(
+        name=f"H4' PSS-high{hold_days}d Spearman",
+        measured=float(rho),
+        threshold=floor,
+        passed=float(rho) >= floor,
+        sample_size=len(rows),
+    )
+
+
 def evaluate_all(result: BacktestResult, baseline_5d: float = 0.005) -> list[HypothesisVerdict]:
     return [
         h1_tier1_hit_rate_5d(result),
+        h1_short_intraday_hit_rate(result, hold_days=1),
+        h1_short_intraday_hit_rate(result, hold_days=3, threshold=0.15),
         h2_pattern_cd_avg_return_5d(result),
         h3_toss_top30_alpha(result, baseline_5d),
         h4_spearman(result),
+        h4_short_spearman(result, hold_days=1),
+        h4_short_spearman(result, hold_days=3),
     ]

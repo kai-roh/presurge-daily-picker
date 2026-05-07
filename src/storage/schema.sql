@@ -129,6 +129,15 @@ CREATE TABLE IF NOT EXISTS trade_log (
     size_pct_capital   REAL,
     pnl_pct            REAL,
     is_paper           INTEGER NOT NULL DEFAULT 0,
-    notes              TEXT
+    notes              TEXT,
+    -- 초단타 alpha 측정용 (T+1/2/3 일중 high + close 기준).
+    -- close: 그날 종가 진입 시 익일 종가 매도, high: 익일 일중 최고가 도달률 (max profit).
+    pnl_high_1d_pct    REAL,
+    pnl_close_1d_pct   REAL,
+    pnl_high_2d_pct    REAL,
+    pnl_close_2d_pct   REAL,
+    pnl_high_3d_pct    REAL,
+    pnl_close_3d_pct   REAL
 );
 CREATE INDEX IF NOT EXISTS idx_trade_ticker ON trade_log(ticker, entry_date);
+CREATE INDEX IF NOT EXISTS idx_trade_date ON trade_log(entry_date);

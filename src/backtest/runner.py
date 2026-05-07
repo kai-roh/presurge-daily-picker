@@ -28,7 +28,11 @@ class TradeRecord:
     triggered_patterns: list[str]
     entry_date: date
     entry_price: float
-    exits: dict[int, tuple[date, float, float]] = field(default_factory=dict)  # hold_days -> (exit_date, exit_price, ret)
+    # close 기반 exit: hold_days -> (exit_date, exit_close, ret_close)
+    exits: dict[int, tuple[date, float, float]] = field(default_factory=dict)
+    # high 기반 exit (일중 최고가 도달률 — 초단타 alpha 측정):
+    #   hold_days -> ret_high  (= (max(high over [entry_date+1, entry_date+hold_days]) - entry) / entry)
+    high_exits: dict[int, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -51,11 +55,30 @@ class BacktestResult:
         )
         return hits / len(rows)
 
+    def hit_rate_high(self, tier: int, hold_days: int, threshold: float) -> float:
+        """일중 high 기반 hit rate — 초단타 max profit 도달율."""
+        rows = self.filter_tier(tier)
+        if not rows:
+            return 0.0
+        hits = sum(
+            1
+            for r in rows
+            if hold_days in r.high_exits and r.high_exits[hold_days] >= threshold
+        )
+        return hits / len(rows)
+
     def avg_return(self, tier: int, hold_days: int) -> float:
         rows = self.filter_tier(tier)
         if not rows:
             return 0.0
         rets = [r.exits[hold_days][2] for r in rows if hold_days in r.exits]
+        return sum(rets) / len(rets) if rets else 0.0
+
+    def avg_return_high(self, tier: int, hold_days: int) -> float:
+        rows = self.filter_tier(tier)
+        if not rows:
+            return 0.0
+        rets = [r.high_exits[hd] for r in rows for hd in [hold_days] if hd in r.high_exits]
         return sum(rets) / len(rets) if rets else 0.0
 
 
@@ -95,6 +118,20 @@ def _exit_price(db: Database, ticker: str, target: date) -> tuple[date, float] |
     if not row:
         return None
     return date.fromisoformat(row["trade_date"]), float(row["close"])
+
+
+def _max_high_in_window(
+    db: Database, ticker: str, start: date, end: date
+) -> float | None:
+    """[start, end] 영업일 윈도우의 max(high) — 일중 최고가 도달률 측정용."""
+    row = db.conn.execute(
+        "SELECT MAX(high) AS h FROM daily_bars "
+        "WHERE ticker = ? AND trade_date BETWEEN ? AND ? AND high IS NOT NULL",
+        (ticker, start.isoformat(), end.isoformat()),
+    ).fetchone()
+    if not row or row["h"] is None:
+        return None
+    return float(row["h"])
 
 
 def run_backtest(
@@ -137,6 +174,10 @@ def run_backtest(
                     exit_date, exit_p = res
                     ret = (exit_p - entry_p) / entry_p
                     rec.exits[hd] = (exit_date, exit_p, ret)
+                    # high 기반 — entry_d 부터 exit_date 까지의 최고가
+                    max_high = _max_high_in_window(db, s.ticker, entry_d, exit_date)
+                    if max_high is not None and entry_p > 0:
+                        rec.high_exits[hd] = (max_high - entry_p) / entry_p
                 trades.append(rec)
 
     return BacktestResult(trades=trades, start=start, end=end)

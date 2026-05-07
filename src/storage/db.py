@@ -62,6 +62,26 @@ class Database:
     def init_schema(self) -> None:
         sql = SCHEMA_PATH.read_text(encoding="utf-8")
         self.conn.executescript(sql)
+        self._migrate_in_place()
+
+    def _migrate_in_place(self) -> None:
+        """기존 DB에 누락된 컬럼/인덱스를 비파괴적으로 추가."""
+        # trade_log: short-horizon pnl 컬럼 (W5+ 추가)
+        existing = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(trade_log)").fetchall()
+        }
+        new_cols = (
+            "pnl_high_1d_pct",
+            "pnl_close_1d_pct",
+            "pnl_high_2d_pct",
+            "pnl_close_2d_pct",
+            "pnl_high_3d_pct",
+            "pnl_close_3d_pct",
+        )
+        for col in new_cols:
+            if col not in existing:
+                self.conn.execute(f"ALTER TABLE trade_log ADD COLUMN {col} REAL")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
