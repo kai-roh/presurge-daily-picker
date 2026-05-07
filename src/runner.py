@@ -108,6 +108,34 @@ def step_ingest_toss(db: Database) -> int:
     return len(rows)
 
 
+def step_ingest_telegram(db: Database, settings: Settings) -> int:
+    """Telegram inbound — 사용자가 보낸 /buy /sell 명령을 trade_log에 적재.
+
+    처리 후 사용자에게 처리 결과 ack 메시지를 보냄 (조용히 누락되지 않게).
+    """
+    from src.ingest.telegram_inbound import ingest_telegram_commands
+
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        return 0
+    res = ingest_telegram_commands(
+        settings.telegram_bot_token, settings.telegram_chat_id, db
+    )
+    n = int(res.get("processed", 0))
+    if n > 0:
+        ack = "Telegram 명령 처리 완료\n\n" + "\n".join(
+            f"- {r}" for r in res.get("results", [])
+        )
+        try:
+            TelegramPusher(
+                bot_token=settings.telegram_bot_token,
+                chat_id=settings.telegram_chat_id,
+                dry_run=settings.dry_run,
+            ).send(ack, parse_mode="HTML")
+        except Exception as exc:
+            logger.warning("ack push failed: %s", exc)
+    return n
+
+
 def step_classify_new_filings(settings: Settings) -> int:
     """미분류 1.01/1.02 8-K filing을 Claude로 분류.
 
@@ -249,6 +277,7 @@ def run_daily(settings: Settings, *, skip: set[str] | None = None) -> int:
             logger.exception("%s failed: %s", name, exc)
             errors.append(f"{name}: {type(exc).__name__}: {str(exc)[:120]}")
 
+    _stage("telegram_inbound", lambda: step_ingest_telegram(db, settings))
     _stage("filings", lambda: step_ingest_filings(db, settings))
     _stage("classify", lambda: step_classify_new_filings(settings))
     _stage("bars", lambda: step_ingest_bars(db, settings))

@@ -19,6 +19,9 @@ env/
 data/*.db
 data/historical/
 data/cache/
+data/.telegram_offset
+data/runner.log
+data/launchd_*.log
 
 .coverage
 htmlcov/
