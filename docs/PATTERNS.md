@@ -39,19 +39,26 @@ class PatternScorer(ABC):
 
 **한계**: 발행주식수 증가율 프록시는 v0.2 MVP에서 항상 None. W3에서 historical Polygon ticker details로 보강.
 
-## Pattern B — Index / ETF Inclusion (max 25 + 5 보너스 = 30 효과)
+## Pattern B — Index / ETF Inclusion (max 5, W4 다운그레이드)
 
 **가설**: Russell 2000/3000, MEME ETF 등 신규 편입 시 패시브 매수 유입.
 
-| 조건 | 점수 |
+| 조건 | 점수 (W4 후) |
 |---|---|
-| announced_at ≤ as_of < effective_at + 7d | +25 |
-| effective_at 통과 후 1주일 (위 조건 불일치) | +15 |
-| 시총 < $500M | +5 (보너스) |
+| announced_at ≤ as_of < effective_at + 7d | +5 |
+| effective_at 통과 후 1주일 (위 조건 불일치) | +3 |
+| 시총 < $500M | +1 (보너스) |
 
-**Trigger**: score ≥ 15
+**Trigger**: score ≥ 3
 
-**데이터 소스**: `index_inclusion_events` 테이블. `db.upsert_index_event(...)` 로 적재. v0.2에서는 known case 수동 시드 + W2 후반에 FTSE Russell IR 페이지 + Roundhill csv 페처 추가.
+**W4 #5 검증 결과**:
+- Russell 2000 reconstitution 2024+2025 (404 universe events) 적용 후 24mo backtest
+- 적용 전 대비 trades 196 → 426 (+117%) 증가
+- *그러나* H4 Spearman 0.261 → 0.042 폭락 (n=144 → n=704)
+- Pattern B 자체로는 5d 단위 alpha 거의 없음 → max를 25 → 5로 다운
+- v0.3에서 effective_day 후 1주일 운용 alpha 별도 분석 검토
+
+**데이터 소스**: `index_inclusion_events` 테이블. iShares IWM CSV `asOfDate` 파라미터로 reconstitution 전/후 holdings diff 자동 추출 (`scripts/seed_russell_events.py`).
 
 **알려진 사례**: TNXP (Russell 2000 편입), BYND (Roundhill MEME ETF)
 

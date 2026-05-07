@@ -31,7 +31,11 @@ TIER3_MAX_TICKERS = 10
 # 패턴 max_score (W4 튜닝 후 갱신, ENV override 지원)
 # ---------------------------------------------------------------------------
 PATTERN_A_MAX = float(os.environ.get("PATTERN_A_MAX_OVERRIDE", 30.0))
-PATTERN_B_MAX = float(os.environ.get("PATTERN_B_MAX_OVERRIDE", 25.0))
+# W4 #5 finding: Russell 2000 편입 자체로는 5d 단위 alpha 거의 없음. n=704
+# 표본에서 Pattern B 활성화 시 H4 Spearman 0.261 → 0.04 폭락 (alpha 희석).
+# 5점으로 다운 = Tier 임계 영향 최소화하면서도 시그널 자체는 보존. v0.3에 별도 패턴
+# 분리 (effective day 후 1주일 운용 = 다른 alpha) 검토.
+PATTERN_B_MAX = float(os.environ.get("PATTERN_B_MAX_OVERRIDE", 5.0))
 PATTERN_C_MAX = float(os.environ.get("PATTERN_C_MAX_OVERRIDE", 50.0))
 PATTERN_D_MAX = float(os.environ.get("PATTERN_D_MAX_OVERRIDE", 30.0))
 PATTERN_E_MAX = float(os.environ.get("PATTERN_E_MAX_OVERRIDE", 25.0))

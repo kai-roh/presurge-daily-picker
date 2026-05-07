@@ -3,7 +3,8 @@ from datetime import date, timedelta
 from src.score import PatternB
 
 
-def test_announced_pre_effective_scores_25(db, today, seed_universe):
+def test_announced_pre_effective_scores_full(db, today, seed_universe):
+    """announced 시점 + 시총 보너스 → 비례 척도의 full score."""
     seed_universe("TNXP", mcap=60_000_000)
     db.upsert_index_event({
         "ticker": "TNXP",
@@ -14,12 +15,13 @@ def test_announced_pre_effective_scores_25(db, today, seed_universe):
         "notes": "",
     })
     res = PatternB().compute("TNXP", today, db)
-    # 25 + 5 (mcap < 500M bonus)
+    # full + small_cap_bonus 합이 max_score 초과 → cap 적용. PATTERN_B_MAX 변경에도 안정.
     assert res.score == PatternB.max_score
     assert res.triggered
 
 
-def test_post_effective_window_scores_15(db, today, seed_universe):
+def test_post_effective_window_scores_post(db, today, seed_universe):
+    """post-effective 윈도우 + 시총 ≥500M → post score만."""
     seed_universe("FOO", mcap=800_000_000)
     db.upsert_index_event({
         "ticker": "FOO",
@@ -30,7 +32,8 @@ def test_post_effective_window_scores_15(db, today, seed_universe):
         "notes": "",
     })
     res = PatternB().compute("FOO", today, db)
-    assert res.score == 15.0
+    # post-effective 점수 = 15 * (max_score/25)
+    assert res.score == PatternB.max_score * 15.0 / 25.0
     assert res.triggered
 
 
