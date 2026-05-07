@@ -1,44 +1,67 @@
 # 운영 RUNBOOK — 일별 자동화 (W5)
 
-매일 09:00 KST에 GitHub Actions cron이 돌면서 watchlist를 Telegram에 푸시한다.
-이 문서는 cron이 깨끗하게 돌도록 1회 설정하는 절차와 장애 대응 절차를 모은다.
+매일 09:00 KST에 자동으로 watchlist를 Telegram에 푸시한다.
+
+**현재 운영 모드 (옵션 A — macOS launchd)**: 로컬 PC가 켜진 동안 매일 09:00 KST 실행. SQLite DB가 로컬에 있어 GitHub Actions(stateless)로는 못 돌리는 W3 데이터(universe + bars + filings + SI)를 그대로 활용.
+
+**다음 단계 (옵션 C — Supabase)**: W6 페이퍼 4-8주 후 알파 검증되면 Supabase로 마이그레이션해서 GitHub Actions 24/7 가동 (PC 의존성 제거).
 
 ---
 
-## 1. GitHub Actions secrets 설정 (1회성)
+## 1. 옵션 A — macOS launchd 가동 절차 (현재)
 
-**Settings → Secrets and variables → Actions → New repository secret** 에서 아래 7개를 추가한다. 값은 모두 로컬 `.env`에 이미 들어있으니 그대로 복사.
-
-| Secret name | 값 출처 | 비고 |
-|---|---|---|
-| `POLYGON_API_KEY` | `.env` | grouped daily 1콜/일이라 무료 티어로 충분 |
-| `ANTHROPIC_API_KEY` | `.env` | 일 1회 리포트 + 신규 8-K 분류 (보통 $0.05/일 이내) |
-| `FINNHUB_API_KEY` | `.env` | universe refresh 시에만 사용 (주 1회) |
-| `TELEGRAM_BOT_TOKEN` | `.env` | 메인 watchlist 채널 |
-| `TELEGRAM_CHAT_ID` | `.env` | 푸시 대상 |
-| `TELEGRAM_ALERT_CHAT_ID` | `.env` | 장애 알림 (메인과 같아도 OK) |
-| `SEC_USER_AGENT` | `.env` | EDGAR 정책상 contact 필수 |
-| `TOSS_TOP30_TICKERS` | (선택) | 미설정 시 Pattern bonus 미적용. 수동 시드 또는 v0.3 스크래핑 |
-
-CLI로 한번에 설정하려면:
+이미 가동 중. 점검 명령:
 
 ```bash
-gh secret set POLYGON_API_KEY --body "$(grep POLYGON_API_KEY .env | cut -d= -f2)"
-gh secret set ANTHROPIC_API_KEY --body "$(grep ANTHROPIC_API_KEY .env | cut -d= -f2)"
-# ... 반복
+# 등록 확인
+launchctl list | grep presurge
+
+# plist 위치
+ls -l ~/Library/LaunchAgents/com.presurge.daily.plist
+
+# 즉시 트리거 (테스트용)
+launchctl start com.presurge.daily
+
+# 비활성화 / 재활성화
+launchctl unload ~/Library/LaunchAgents/com.presurge.daily.plist
+launchctl load ~/Library/LaunchAgents/com.presurge.daily.plist
 ```
+
+**스케줄**: 매일 **09:00 KST** (`StartCalendarInterval Hour=9 Minute=0`).
+**로그**: `data/runner.log` (메인), `data/launchd_stdout.log`, `data/launchd_stderr.log`.
+
+**PC가 09:00 KST에 꺼져 있던 경우** — launchd는 wake 후 다음 trigger를 기다림 (그날 watchlist 결손). 미보장. 안정적 24/7 운영은 옵션 C로 마이그레이션 필요.
+
+### 1.1 secrets는 .env 파일에 보관
+
+launchd 실행 시 `set -a; source .env; set +a` 로 ENV 주입. GitHub Actions secrets와 분리됨.
+
+`.env`에 들어있는 값:
+- POLYGON_API_KEY, ANTHROPIC_API_KEY, FINNHUB_API_KEY
+- TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ALERT_CHAT_ID
+- SEC_USER_AGENT
+- TOSS_TOP30_TICKERS (선택)
+
+> ⚠ `.env`에 trailing whitespace 주의. shell `awk '{$1=$1};1`로 trim 권장.
 
 ---
 
-## 2. cron 활성화 / 첫 수동 트리거
+## 2. 옵션 C — Supabase 마이그레이션 (W6 작업, 4-8주 후 검토)
 
-1. **Settings → Actions → General → Workflow permissions** 가 `Read and write` 인지 확인 (artifact upload 위해)
-2. `.github/workflows/daily_pick.yml` 가 main 또는 작업 브랜치에 있는 채로 push
-3. **Actions 탭 → Daily Pre-Surge Pick → Run workflow** 로 첫 수동 트리거
-4. 30분 안에 완료 + Telegram에 메시지 도착하는지 확인
-5. cron schedule (`0 0 * * *`)이 자동 활성화 — 매일 09:00 KST 실행
+GitHub Actions cron + Supabase Postgres로 전환:
+1. Supabase 프로젝트 생성 (free tier 500MB)
+2. `src/storage/db.py` 추상화 — SQLite/Supabase 전환 가능
+3. universe + daily_bars + filings + short_interest + pss_scores + watchlist_runs + trade_log 마이그레이션
+4. GitHub Actions secrets에 `DATABASE_URL=postgresql://...` 추가
+5. `.github/workflows/daily_pick.yml` cron 재활성화 (`gh workflow enable daily_pick.yml`)
 
-> ⚠ GitHub Actions cron은 free tier 사용량 따라 최대 ~30분 지연 가능. v0.3에서 self-hosted runner 또는 Vercel cron 검토.
+이 시점에 launchd 비활성화:
+```bash
+launchctl unload ~/Library/LaunchAgents/com.presurge.daily.plist
+rm ~/Library/LaunchAgents/com.presurge.daily.plist
+```
+
+GitHub Actions cron은 현재 `gh workflow disable`로 정지된 상태 (W5 가동 시 옵션 A 채택으로 SQLite local DB와 충돌 방지).
 
 ---
 
