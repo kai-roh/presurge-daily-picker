@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 
 from src.config import SEC_RPS, Settings
 from src.ingest._http import HttpClient
+from src.ingest.sec_body import extract_body
 from src.report.claude_summarizer import ClaudeSummarizer
 from src.storage.db import get_db
 
@@ -78,6 +79,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--checkpoint-every", type=int, default=100)
     parser.add_argument("--workers", type=int, default=4, help="병렬 worker 수")
+    parser.add_argument(
+        "--reclassify-pattern",
+        default="",
+        help="이미 분류된 항목 중 해당 패턴(A/C/F)을 재분류 (W4 prompt 개선 검증용)",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings.from_env()
@@ -94,9 +100,15 @@ def main(argv: list[str] | None = None) -> int:
 
     where_clauses = " OR ".join(["items LIKE ?" for _ in items_filter])
     params: list[Any] = [f"%{it}%" for it in items_filter]
+    if args.reclassify_pattern:
+        # 재분류 모드: 해당 패턴을 가진 기존 분류건만 다시 호출
+        condition = "classification LIKE ?"
+        params = [f"%{args.reclassify_pattern.upper()}%"] + params
+    else:
+        condition = "classification IS NULL"
     sql = (
         f"SELECT accession_no, ticker, cik, items, raw_text_url FROM filings "
-        f"WHERE classification IS NULL AND ({where_clauses}) "
+        f"WHERE {condition} AND ({where_clauses}) "
         f"ORDER BY filed_at"
     )
     if args.limit:
@@ -148,9 +160,16 @@ def main(argv: list[str] | None = None) -> int:
         items = row["items"] or ""
         body_url = _build_body_url(row["cik"] or "", accession)
         try:
-            body_text = sec_http.get(body_url).text
+            raw_text = sec_http.get(body_url).text
         except Exception as exc:
             logger.warning("body fetch failed %s: %s", accession, exc)
+            with progress_lock:
+                counters["no_body"] += 1
+            return
+        # SGML/XBRL 래퍼 제거 → 실제 8-K 본문만 Claude로
+        body_text = extract_body(raw_text, max_chars=8000)
+        if len(body_text) < 200:
+            logger.warning("body too short after extract %s (%d chars)", accession, len(body_text))
             with progress_lock:
                 counters["no_body"] += 1
             return
