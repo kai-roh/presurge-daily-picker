@@ -9,15 +9,15 @@
 
 **Settings → Secrets and variables → Actions → New repository secret** 에서 아래 7개를 추가한다. 값은 모두 로컬 `.env`에 이미 들어있으니 그대로 복사.
 
-| Secret name | 값 | 비고 |
+| Secret name | 값 출처 | 비고 |
 |---|---|---|
-| `POLYGON_API_KEY` | `gBLpW...18JFfRqf` | grouped daily 1콜/일이라 무료 티어로 충분 |
-| `ANTHROPIC_API_KEY` | `sk-ant-...` | 일 1회 리포트 + 신규 8-K 분류 (보통 $0.05/일 이내) |
-| `FINNHUB_API_KEY` | `d7tjr...d3keujg` | universe refresh 시에만 사용 (주 1회) |
-| `TELEGRAM_BOT_TOKEN` | `8714446029:AAHs...` | 메인 watchlist 채널 |
-| `TELEGRAM_CHAT_ID` | `8470889721` | 푸시 대상 |
-| `TELEGRAM_ALERT_CHAT_ID` | `8470889721` | 장애 알림 (메인과 같아도 OK) |
-| `SEC_USER_AGENT` | `presurge-picker heonsub6558@gmail.com` | EDGAR 정책상 contact 필수 |
+| `POLYGON_API_KEY` | `.env` | grouped daily 1콜/일이라 무료 티어로 충분 |
+| `ANTHROPIC_API_KEY` | `.env` | 일 1회 리포트 + 신규 8-K 분류 (보통 $0.05/일 이내) |
+| `FINNHUB_API_KEY` | `.env` | universe refresh 시에만 사용 (주 1회) |
+| `TELEGRAM_BOT_TOKEN` | `.env` | 메인 watchlist 채널 |
+| `TELEGRAM_CHAT_ID` | `.env` | 푸시 대상 |
+| `TELEGRAM_ALERT_CHAT_ID` | `.env` | 장애 알림 (메인과 같아도 OK) |
+| `SEC_USER_AGENT` | `.env` | EDGAR 정책상 contact 필수 |
 | `TOSS_TOP30_TICKERS` | (선택) | 미설정 시 Pattern bonus 미적용. 수동 시드 또는 v0.3 스크래핑 |
 
 CLI로 한번에 설정하려면:
