@@ -47,6 +47,7 @@ class TickerScore:
             "pattern_d": self.breakdown.get("D", 0.0),
             "pattern_e": self.breakdown.get("E", 0.0),
             "pattern_f": self.breakdown.get("F", 0.0),
+            "pattern_g": self.breakdown.get("G", 0.0),
             "bonus_toss": self.bonus_toss,
             "penalty_run": self.penalty_run,
             "penalty_earn": self.penalty_earn,

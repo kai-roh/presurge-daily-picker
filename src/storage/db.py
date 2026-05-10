@@ -83,6 +83,16 @@ class Database:
             if col not in existing:
                 self.conn.execute(f"ALTER TABLE trade_log ADD COLUMN {col} REAL")
 
+        # pss_scores: pattern_g 컬럼 (v0.3 RVOL 추가)
+        pss_cols = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(pss_scores)").fetchall()
+        }
+        if "pattern_g" not in pss_cols:
+            self.conn.execute(
+                "ALTER TABLE pss_scores ADD COLUMN pattern_g REAL NOT NULL DEFAULT 0"
+            )
+
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         try:
@@ -168,6 +178,37 @@ class Database:
             (ticker, on.isoformat()),
         ).fetchone()
         return row["close"] if row else None
+
+    def latest_volume(self, ticker: str, as_of: date) -> int | None:
+        """as_of 이전 또는 당일의 가장 최근 거래일 volume."""
+        row = self.conn.execute(
+            "SELECT volume FROM daily_bars WHERE ticker = ? AND trade_date <= ? "
+            "AND volume IS NOT NULL ORDER BY trade_date DESC LIMIT 1",
+            (ticker, as_of.isoformat()),
+        ).fetchone()
+        return int(row["volume"]) if row and row["volume"] else None
+
+    def avg_volume(self, ticker: str, as_of: date, lookback_days: int) -> float | None:
+        """as_of 이전 lookback_days 영업일 평균 거래량 (최근 거래일 자체는 제외)."""
+        # 최근 거래일 제외 → as_of 이전의 가장 최근 거래일 직전 N일 평균
+        latest = self.conn.execute(
+            "SELECT MAX(trade_date) AS d FROM daily_bars WHERE ticker = ? AND trade_date <= ?",
+            (ticker, as_of.isoformat()),
+        ).fetchone()
+        if not latest or not latest["d"]:
+            return None
+        # latest["d"] 이전 ~ -1.5 * lookback_days 범위에서 가장 가까운 lookback_days 영업일
+        # 단순화: 캘린더 일수 lookback_days * 1.5 만큼 윈도우
+        from datetime import timedelta as _td
+        latest_d = date.fromisoformat(latest["d"])
+        window_start = latest_d - _td(days=int(lookback_days * 1.5))
+        row = self.conn.execute(
+            "SELECT AVG(volume) AS v FROM daily_bars "
+            "WHERE ticker = ? AND trade_date >= ? AND trade_date < ? "
+            "AND volume IS NOT NULL AND volume > 0",
+            (ticker, window_start.isoformat(), latest["d"]),
+        ).fetchone()
+        return float(row["v"]) if row and row["v"] else None
 
     def price_change_pct(self, ticker: str, as_of: date, days: int) -> float | None:
         end = self.get_close(ticker, as_of)
@@ -385,10 +426,12 @@ class Database:
         sql = """
         INSERT OR REPLACE INTO pss_scores(
             score_date, ticker, pattern_a, pattern_b, pattern_c, pattern_d, pattern_e, pattern_f,
-            bonus_toss, penalty_run, penalty_earn, pss_total, tier, triggered_patterns, metadata_json
+            pattern_g, bonus_toss, penalty_run, penalty_earn, pss_total, tier,
+            triggered_patterns, metadata_json
         ) VALUES (
             :score_date, :ticker, :pattern_a, :pattern_b, :pattern_c, :pattern_d, :pattern_e, :pattern_f,
-            :bonus_toss, :penalty_run, :penalty_earn, :pss_total, :tier, :triggered_patterns, :metadata_json
+            :pattern_g, :bonus_toss, :penalty_run, :penalty_earn, :pss_total, :tier,
+            :triggered_patterns, :metadata_json
         )
         """
         params = {"score_date": score_date.isoformat(), "ticker": ticker, **breakdown}

@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS pss_scores (
     pattern_d          REAL NOT NULL DEFAULT 0,
     pattern_e          REAL NOT NULL DEFAULT 0,
     pattern_f          REAL NOT NULL DEFAULT 0,
+    pattern_g          REAL NOT NULL DEFAULT 0,
     bonus_toss         REAL NOT NULL DEFAULT 0,
     penalty_run        REAL NOT NULL DEFAULT 0,
     penalty_earn       REAL NOT NULL DEFAULT 0,

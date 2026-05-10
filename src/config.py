@@ -40,6 +40,10 @@ PATTERN_C_MAX = float(os.environ.get("PATTERN_C_MAX_OVERRIDE", 50.0))
 PATTERN_D_MAX = float(os.environ.get("PATTERN_D_MAX_OVERRIDE", 30.0))
 PATTERN_E_MAX = float(os.environ.get("PATTERN_E_MAX_OVERRIDE", 25.0))
 PATTERN_F_MAX = float(os.environ.get("PATTERN_F_MAX_OVERRIDE", 25.0))
+# v0.3 Pattern G — Volume Spike (RVOL). 24mo 데이터로 검증된 lift:
+# RVOL>=5 → surge 발생 확률 4.6x, RVOL>=3 → 2.7x baseline.
+PATTERN_G_MAX = float(os.environ.get("PATTERN_G_MAX_OVERRIDE", 20.0))
+PATTERN_G_RVOL_LOOKBACK_DAYS = 30
 
 # ---------------------------------------------------------------------------
 # 보너스 / 페널티
