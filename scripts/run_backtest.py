@@ -49,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="trade_log 테이블에 시뮬 결과 저장",
     )
+    parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="매일 PSS 점수 전체 + watchlist_runs 까지 DB에 영구 적재 (recall 분석용)",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings.from_env()
@@ -63,7 +68,9 @@ def main(argv: list[str] | None = None) -> int:
         "Backtest %s..%s tiers=%s hold_days=%s", start, end, tiers, hold_days
     )
     started = time.monotonic()
-    result = run_backtest(db, start, end, tiers=tiers, hold_days_list=hold_days)
+    result = run_backtest(
+        db, start, end, tiers=tiers, hold_days_list=hold_days, persist=args.persist
+    )
     elapsed = time.monotonic() - started
     logger.info(
         "Backtest done in %.0fs. trades=%d", elapsed, len(result.trades)

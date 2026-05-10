@@ -393,7 +393,8 @@ class Database:
         """
         params = {"score_date": score_date.isoformat(), "ticker": ticker, **breakdown}
         if "metadata_json" in params and not isinstance(params["metadata_json"], str):
-            params["metadata_json"] = json.dumps(params["metadata_json"])
+            # Pattern B 의 events 안에 date 객체가 들어있을 수 있어 default=str 필요
+            params["metadata_json"] = json.dumps(params["metadata_json"], default=str)
         self.conn.execute(sql, params)
 
     def get_pss(self, score_date: date, ticker: str) -> sqlite3.Row | None:

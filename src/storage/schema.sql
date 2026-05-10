@@ -115,6 +115,27 @@ CREATE TABLE IF NOT EXISTS watchlist_runs (
     push_status  TEXT
 );
 
+-- 실제 급등 이벤트 (universe 전체) — recall 학습용.
+-- precision은 trade_log (우리 picks 중 적중률), recall은 surge_events
+-- (실제 급등 중 PSS가 잡은 비율). 두 metric 모두 있어야 시스템 평가 가능.
+CREATE TABLE IF NOT EXISTS surge_events (
+    surge_date     TEXT NOT NULL,            -- 급등 발생일 (= prev_close 다음 영업일)
+    ticker         TEXT NOT NULL,
+    surge_type     TEXT NOT NULL,            -- 'high_1d_10' | 'high_1d_20' | 'close_1d_10' | ...
+    surge_pct      REAL NOT NULL,            -- 실제 도달률 (예: 0.157 = +15.7%)
+    prev_close     REAL,                     -- 전 영업일 종가 (기준가)
+    surge_high     REAL,
+    surge_close    REAL,
+    -- 전 영업일 (= 우리 picker가 평가한 시점) PSS 정보. 없으면 NULL.
+    prev_pss_total REAL,
+    prev_tier      INTEGER,
+    prev_patterns  TEXT,                     -- 'A,C' CSV
+    was_picked     INTEGER NOT NULL DEFAULT 0, -- 1 = 전날 watchlist Tier 1/2/3에 포함
+    PRIMARY KEY (surge_date, ticker, surge_type)
+);
+CREATE INDEX IF NOT EXISTS idx_surge_date ON surge_events(surge_date);
+CREATE INDEX IF NOT EXISTS idx_surge_ticker ON surge_events(ticker, surge_date);
+
 CREATE TABLE IF NOT EXISTS trade_log (
     trade_id           INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker             TEXT NOT NULL,

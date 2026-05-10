@@ -141,8 +141,13 @@ def run_backtest(
     *,
     tiers: tuple[int, ...] = (1,),
     hold_days_list: tuple[int, ...] = (1, 2, 3, 5),
+    persist: bool = False,
 ) -> BacktestResult:
-    """tier 1 종목을 영업일별로 추출, 익일 시가 진입 + N일 후 종가 청산 시뮬."""
+    """tier 1 종목을 영업일별로 추출, 익일 시가 진입 + N일 후 종가 청산 시뮬.
+
+    persist=True 시 매일 PSS 점수 전체와 watchlist_runs를 DB에 적재.
+    surge recall 분석 등 retroactive feature lookup 용.
+    """
     trades: list[TradeRecord] = []
 
     for d in trading_days(start, end):
@@ -150,6 +155,39 @@ def run_backtest(
         if not scores:
             continue
         by_tier = classify_tiers(scores)
+
+        if persist:
+            import json as _json
+
+            from src.score.pss_aggregator import persist as _persist
+            _persist(scores, d, db)
+            t1 = [
+                {"ticker": s.ticker, "pss_total": s.pss_total, "tier": s.tier,
+                 "triggered_patterns": s.triggered_patterns}
+                for s in by_tier.get(1, [])
+            ]
+            t2 = [
+                {"ticker": s.ticker, "pss_total": s.pss_total, "tier": s.tier,
+                 "triggered_patterns": s.triggered_patterns}
+                for s in by_tier.get(2, [])
+            ]
+            t3 = [
+                {"ticker": s.ticker, "pss_total": s.pss_total, "tier": s.tier,
+                 "triggered_patterns": s.triggered_patterns}
+                for s in by_tier.get(3, [])
+            ]
+            db.conn.execute(
+                """
+                INSERT OR REPLACE INTO watchlist_runs(run_date, tier1_json, tier2_json, tier3_json,
+                                                     report_md, push_status)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    d.isoformat(),
+                    _json.dumps(t1), _json.dumps(t2), _json.dumps(t3),
+                    "(backtest persist)", "backtest",
+                ),
+            )
 
         for tier in tiers:
             for s in by_tier.get(tier, []):

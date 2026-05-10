@@ -173,6 +173,61 @@ def step_classify_new_filings(settings: Settings) -> int:
     return 0
 
 
+def step_record_surges(db: Database) -> int:
+    """어제 미국 close 기준 universe 급등 자동 적재 (recall 학습용).
+
+    bars 적재 직후에 호출되어야 하며, daily_bars 의 가장 최근 2일 페어로 비교.
+    backfill_surges 모듈의 핵심 함수 재사용.
+    """
+    from datetime import date as _date
+
+    from scripts.backfill_surges import (
+        detect_surge_types,
+        find_surges,
+        lookup_prev_pss,
+        lookup_was_picked,
+    )
+
+    # daily_bars에서 가장 최근 2 영업일을 surge 페어로
+    rows = db.conn.execute(
+        "SELECT DISTINCT trade_date FROM daily_bars ORDER BY trade_date DESC LIMIT 2"
+    ).fetchall()
+    if len(rows) < 2:
+        return 0
+    surge_date = _date.fromisoformat(rows[0]["trade_date"])
+    prev_date = _date.fromisoformat(rows[1]["trade_date"])
+
+    pairs = find_surges(db, prev_date, prev_date)
+    pick_cache: dict[str, set[str]] = {}
+    inserted = 0
+    with db.transaction() as conn:
+        for p in pairs:
+            if p["surge_date"] != surge_date.isoformat():
+                continue
+            types = detect_surge_types(p)
+            if not types:
+                continue
+            pss_total, tier, patterns = lookup_prev_pss(db, p["ticker"], p["prev_date"])
+            picked = lookup_was_picked(db, p["ticker"], p["prev_date"], pick_cache)
+            for type_name, pct, _col in types:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO surge_events(
+                        surge_date, ticker, surge_type, surge_pct,
+                        prev_close, surge_high, surge_close,
+                        prev_pss_total, prev_tier, prev_patterns, was_picked
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        p["surge_date"], p["ticker"], type_name, pct,
+                        p["prev_close"], p["surge_high"], p["surge_close"],
+                        pss_total, tier, patterns, picked,
+                    ),
+                )
+                inserted += 1
+    return inserted
+
+
 def step_score(db: Database, as_of: date) -> tuple[list, dict]:
     scores = pss_aggregator.compute_universe(as_of, db)
     pss_aggregator.persist(scores, as_of, db)
@@ -283,6 +338,7 @@ def run_daily(settings: Settings, *, skip: set[str] | None = None) -> int:
     _stage("bars", lambda: step_ingest_bars(db, settings))
     _stage("reddit", lambda: step_ingest_reddit(db))
     _stage("toss", lambda: step_ingest_toss(db))
+    _stage("record_surges", lambda: step_record_surges(db))
 
     scores, tiers = step_score(db, as_of)
 
