@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.presurge.options_weekly</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd /Users/seop/presurge-daily-picker &amp;&amp; set -a &amp;&amp; source .env &amp;&amp; set +a &amp;&amp; PYTHONPATH=. /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -m scripts.ingest_options_snapshot --workers 4 &gt;&gt; data/options_weekly.log 2&gt;&amp;1</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>      <!-- 0=Sunday in launchd -->
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/seop/presurge-daily-picker/data/options_launchd_stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/seop/presurge-daily-picker/data/options_launchd_stderr.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/seop/presurge-daily-picker</string>
+</dict>
+</plist>

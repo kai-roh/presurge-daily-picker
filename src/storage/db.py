@@ -422,6 +422,23 @@ class Database:
     # ------------------------------------------------------------------
     # PSS scores
     # ------------------------------------------------------------------
+    def upsert_options_activity(self, rows: Iterable[dict[str, Any]]) -> int:
+        sql = """
+        INSERT OR REPLACE INTO options_activity(
+            snap_date, ticker, expiry, call_volume, put_volume,
+            call_oi, put_oi, cp_volume_ratio
+        ) VALUES (
+            :snap_date, :ticker, :expiry, :call_volume, :put_volume,
+            :call_oi, :put_oi, :cp_volume_ratio
+        )
+        """
+        n = 0
+        with self.transaction() as conn:
+            for r in rows:
+                conn.execute(sql, r)
+                n += 1
+        return n
+
     def upsert_pss(self, score_date: date, ticker: str, breakdown: dict[str, Any]) -> None:
         sql = """
         INSERT OR REPLACE INTO pss_scores(

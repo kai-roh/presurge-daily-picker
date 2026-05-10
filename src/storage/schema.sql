@@ -116,6 +116,22 @@ CREATE TABLE IF NOT EXISTS watchlist_runs (
     push_status  TEXT
 );
 
+-- 옵션 활동 weekly snapshot (v0.3 Pattern H 후보 — UOA 검증용).
+-- yfinance 가까운 1개 만기 chain의 call/put 합 + open interest.
+CREATE TABLE IF NOT EXISTS options_activity (
+    snap_date       TEXT NOT NULL,
+    ticker          TEXT NOT NULL,
+    expiry          TEXT,                  -- 가장 가까운 만기
+    call_volume     INTEGER,
+    put_volume      INTEGER,
+    call_oi         INTEGER,
+    put_oi          INTEGER,
+    cp_volume_ratio REAL,                  -- call / max(put, 1)
+    PRIMARY KEY (snap_date, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_options_date ON options_activity(snap_date);
+CREATE INDEX IF NOT EXISTS idx_options_ticker ON options_activity(ticker, snap_date);
+
 -- 실제 급등 이벤트 (universe 전체) — recall 학습용.
 -- precision은 trade_log (우리 picks 중 적중률), recall은 surge_events
 -- (실제 급등 중 PSS가 잡은 비율). 두 metric 모두 있어야 시스템 평가 가능.
