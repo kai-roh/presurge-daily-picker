@@ -124,12 +124,12 @@ def process_watchlist_run(db: Database, run_date: date) -> dict[str, int]:
     if not row:
         return {"updated": 0, "skipped": 0}
 
+    import contextlib
+
     picks: list[dict] = []
     for col in ("tier1_json", "tier2_json", "tier3_json"):
-        try:
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
             picks.extend(json.loads(row[col] or "[]"))
-        except (json.JSONDecodeError, TypeError):
-            pass
 
     if not picks:
         return {"updated": 0, "skipped": 0}

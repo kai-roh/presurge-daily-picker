@@ -17,13 +17,20 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 import time
-import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
+
+from dotenv import load_dotenv
+
+from src.config import MARKET_CAP_MAX_USD, MARKET_CAP_MIN_USD, SEC_RPS, Settings
+from src.ingest._http import HttpClient
+from src.report.claude_summarizer import ClaudeSummarizer
+from src.storage.db import get_db
 
 # efts hits._source.display_names 포맷:
 #   "ESSENTIAL PROPERTIES REALTY TRUST, INC.  (EPRT)  (CIK 0001728951)"
@@ -37,13 +44,6 @@ def extract_tickers_from_display_name(display_name: str) -> list[str]:
     if not m:
         return []
     return [t.strip() for t in m.group(1).split(",") if t.strip()]
-
-from dotenv import load_dotenv
-
-from src.config import MARKET_CAP_MAX_USD, MARKET_CAP_MIN_USD, SEC_RPS, Settings
-from src.ingest._http import HttpClient
-from src.report.claude_summarizer import ClaudeSummarizer
-from src.storage.db import get_db
 
 logger = logging.getLogger(__name__)
 

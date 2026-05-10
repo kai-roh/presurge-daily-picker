@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -80,14 +80,14 @@ def parse_command(text: str) -> TradeCommand | None:
         return None
     price = float(parts[2])
 
+    import contextlib
+
     shares: int | None = None
     entry_date: date | None = None
     for p in parts[3:]:
         if _DATE_RE.match(p):
-            try:
+            with contextlib.suppress(ValueError):
                 entry_date = date.fromisoformat(p)
-            except ValueError:
-                pass
         elif p.isdigit() and shares is None:
             shares = int(p)
 
@@ -161,7 +161,7 @@ def apply_command(db: Database, cmd: TradeCommand) -> str:
             """,
             (
                 cmd.ticker, entry_d.isoformat(), cmd.price, pss, tier,
-                patterns, cmd.shares, f"telegram /buy",
+                patterns, cmd.shares, "telegram /buy",
             ),
         )
         return f"buy: {cmd.ticker} @ {cmd.price} x{cmd.shares or '?'}"
