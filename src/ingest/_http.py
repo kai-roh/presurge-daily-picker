@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -43,11 +43,21 @@ class RateLimiter:
             self._calls.append(time.monotonic())
 
 
+def _is_retryable(exc: BaseException) -> bool:
+    """네트워크 + 5xx + 429 만 retry. 다른 4xx (401/403/404)는 즉시 fail."""
+    if isinstance(exc, httpx.TransportError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code == 429 or 500 <= code < 600
+    return False
+
+
 _RETRY = retry(
     reraise=True,
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=1, max=30),
-    retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
+    retry=retry_if_exception(_is_retryable),
 )
 
 

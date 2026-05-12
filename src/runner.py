@@ -55,12 +55,32 @@ def step_ingest_bars(db: Database, settings: Settings) -> int:
     pg = PolygonBars(settings.polygon_api_key)
     try:
         target = pg.previous_trading_day(datetime.now(UTC).date())
-        rows = pg.grouped_daily(target)
+        # Polygon 무료티어가 "today before end of day"를 403으로 차단하는 경우 한 영업일
+        # 거슬러 fallback. 최근 거래일이 폴리곤 기준 'today' 라면 발생.
+        rows = []
+        for attempt in range(3):
+            try:
+                rows = pg.grouped_daily(target)
+                break
+            except Exception as exc:
+                msg = str(exc)
+                is_too_recent = (
+                    "403" in msg or "NOT_AUTHORIZED" in msg or "before end of day" in msg
+                )
+                if not is_too_recent or attempt == 2:
+                    raise
+                logger.warning(
+                    "bars %s blocked by Polygon free-tier (likely too recent); "
+                    "falling back to previous trading day",
+                    target,
+                )
+                target = pg.previous_trading_day(target)
         from src.config import MARKET_CAP_MAX_USD, MARKET_CAP_MIN_USD
 
         allowed = set(db.universe_tickers(MARKET_CAP_MIN_USD, MARKET_CAP_MAX_USD))
         if allowed:
             rows = pg.filter_universe(rows, allowed)
+        logger.info("bars target=%s rows=%d", target, len(rows))
         return db.upsert_bars(r for r in rows if r.get("ticker"))
     finally:
         pg.close()
