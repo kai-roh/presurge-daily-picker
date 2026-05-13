@@ -121,11 +121,43 @@ def step_ingest_stocktwits(db: Database, tickers: list[str]) -> int:
 
 
 def step_ingest_toss(db: Database) -> int:
-    fetcher = TossVolumeFetcher()
-    rows = fetcher.fetch_top30(date.today())
+    """Retail trending tickers (Toss app 대체).
+
+    fallback chain (위에서 아래로 시도):
+    1. Yahoo Finance trending API (query1 → query2 mirror)
+    2. ApeWisdom WSB rank top 30 (오늘 적재된 reddit_wsb mention_rank)
+    3. TOSS_TOP30_TICKERS env var (manual seed)
+
+    `toss_top_volume` 테이블 + `bonus_toss` 점수 로직은 보존. 의미만 'Korean retail
+    volume'에서 'retail interest (WSB + Yahoo trending)'로 변경.
+    """
+    from src.ingest.yahoo_trending import fetch_trending, to_db_ranks
+
+    today = date.today()
+    tickers = fetch_trending(count=30)
+    if tickers:
+        db.upsert_toss(today, to_db_ranks(tickers))
+        return len(tickers)
+
+    # Fallback 1: ApeWisdom WSB ranking
+    rows = db.conn.execute(
+        "SELECT ticker FROM social_mentions WHERE source = 'reddit_wsb' AND mention_date = ? "
+        "AND rank IS NOT NULL ORDER BY rank LIMIT 30",
+        (today.isoformat(),),
+    ).fetchall()
     if rows:
-        db.upsert_toss(date.today(), rows)
-    return len(rows)
+        ranks = [(i + 1, r["ticker"]) for i, r in enumerate(rows)]
+        db.upsert_toss(today, ranks)
+        logger.info("trending fallback: WSB rank top %d", len(ranks))
+        return len(ranks)
+
+    # Fallback 2: legacy TOSS_TOP30_TICKERS env seed
+    fetcher = TossVolumeFetcher()
+    legacy = fetcher.fetch_top30(today)
+    if legacy:
+        db.upsert_toss(today, legacy)
+        return len(legacy)
+    return 0
 
 
 def step_ingest_telegram(db: Database, settings: Settings) -> int:
