@@ -28,6 +28,7 @@ jobs:
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       TOSS_TOP30_TICKERS: ${{ secrets.TOSS_TOP30_TICKERS }}
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
 

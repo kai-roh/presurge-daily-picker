@@ -376,6 +376,52 @@ class Database:
     # daily bars
     # ------------------------------------------------------------------
     def upsert_bars(self, rows: Iterable[dict[str, Any]]) -> int:
+        if self.backend == "postgres":
+            prepared = []
+            for r in rows:
+                if not r.get("ticker") or not r.get("trade_date"):
+                    continue
+                row = dict(r)
+                if row.get("volume") is not None:
+                    row["volume"] = int(float(row["volume"]))
+                prepared.append(row)
+            if not prepared:
+                return 0
+
+            cols = ["ticker", "trade_date", "open", "high", "low", "close", "volume", "vwap"]
+            temp = "tmp_daily_bars"
+            raw = self.conn._conn  # noqa: SLF001
+            raw.execute("DROP TABLE IF EXISTS tmp_daily_bars")
+            raw.execute("CREATE TEMP TABLE tmp_daily_bars (LIKE daily_bars INCLUDING DEFAULTS)")
+            buf = io.StringIO()
+            writer = csv.writer(buf, lineterminator="\n")
+            for row in prepared:
+                writer.writerow([row.get(c) for c in cols])
+            buf.seek(0)
+            with (
+                raw.cursor() as cur,
+                cur.copy(
+                    f"COPY {temp} ({', '.join(cols)}) FROM STDIN WITH (FORMAT CSV)"
+                ) as copy,
+            ):
+                copy.write(buf.getvalue())
+            raw.execute(
+                """
+                INSERT INTO daily_bars(ticker, trade_date, open, high, low, close, volume, vwap)
+                SELECT ticker, trade_date, open, high, low, close, volume, vwap
+                FROM tmp_daily_bars
+                ON CONFLICT (ticker, trade_date) DO UPDATE SET
+                    open = EXCLUDED.open,
+                    high = EXCLUDED.high,
+                    low = EXCLUDED.low,
+                    close = EXCLUDED.close,
+                    volume = EXCLUDED.volume,
+                    vwap = EXCLUDED.vwap
+                """
+            )
+            raw.execute("DROP TABLE IF EXISTS tmp_daily_bars")
+            return len(prepared)
+
         sql = """
         INSERT OR REPLACE INTO daily_bars(ticker, trade_date, open, high, low, close, volume, vwap)
         VALUES (:ticker, :trade_date, :open, :high, :low, :close, :volume, :vwap)

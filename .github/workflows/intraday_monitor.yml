@@ -27,6 +27,7 @@ jobs:
       TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       INTRADAY_ENABLED: "1"
+      PYTHONUNBUFFERED: "1"
       INTRADAY_MAX_TICKERS: "20"
       INTRADAY_INTERVAL_SECONDS: "300"
       INTRADAY_USE_YFINANCE: "1"
@@ -67,4 +68,3 @@ jobs:
           path: data/*.log
           retention-days: 14
           if-no-files-found: ignore
-
