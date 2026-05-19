@@ -1,0 +1,50 @@
+name: Options Weekly Snapshot
+
+on:
+  schedule:
+    - cron: "0 17 * * 6"        # 토요일 17:00 UTC = 일요일 02:00 KST
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "optional ticker limit for smoke tests"
+        required: false
+        default: "0"
+
+concurrency:
+  group: options-weekly
+  cancel-in-progress: true
+
+jobs:
+  options-weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Initialize schema
+        run: python -m src.storage.db --init
+
+      - name: Run weekly options snapshot
+        run: python -m scripts.ingest_options_snapshot --workers 4 --limit "${{ github.event.inputs.limit || '0' }}"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: options-weekly-${{ github.run_id }}
+          path: data/*.log
+          retention-days: 14
+          if-no-files-found: ignore
