@@ -179,3 +179,43 @@ CREATE TABLE IF NOT EXISTS trade_log (
 );
 CREATE INDEX IF NOT EXISTS idx_trade_ticker ON trade_log(ticker, entry_date);
 CREATE INDEX IF NOT EXISTS idx_trade_date ON trade_log(entry_date);
+
+-- 장중 알림 원장 (v0.4 Intraday Monitor).
+-- Telegram 발송 여부와 관계없이 rule engine이 만든 signal을 저장해 사후 성과를 학습한다.
+CREATE TABLE IF NOT EXISTS signal_events (
+    signal_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_ts          TEXT NOT NULL,
+    trade_date         TEXT NOT NULL,
+    ticker             TEXT NOT NULL,
+    signal_type        TEXT NOT NULL, -- BUY_WATCH | TAKE_PROFIT | SELL_WATCH | CAUTION
+    trigger_code       TEXT NOT NULL, -- ORB | VWAP_RECLAIM | RVOL_CONT | VWAP_LOSS | EXHAUSTION | ...
+    price              REAL NOT NULL,
+    ref_price          REAL,
+    pss_total          REAL,
+    tier               INTEGER,
+    triggered_patterns TEXT,
+    source             TEXT NOT NULL, -- yfinance | finnhub | mixed
+    metadata_json      TEXT,
+    telegram_sent_at   TEXT,
+    telegram_status    TEXT,
+    UNIQUE(trade_date, ticker, signal_type, trigger_code, signal_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_signal_date ON signal_events(trade_date, signal_ts);
+CREATE INDEX IF NOT EXISTS idx_signal_ticker ON signal_events(ticker, trade_date);
+CREATE INDEX IF NOT EXISTS idx_signal_type ON signal_events(trade_date, signal_type);
+
+-- 장중 signal 이후 성과. BUY 계열은 이후 최대 상승률/역행폭, SELL/CAUTION은 회피 성과를 본다.
+CREATE TABLE IF NOT EXISTS signal_outcomes (
+    signal_id          INTEGER PRIMARY KEY,
+    max_10m_pct        REAL,
+    close_10m_pct      REAL,
+    max_30m_pct        REAL,
+    close_30m_pct      REAL,
+    max_60m_pct        REAL,
+    close_60m_pct      REAL,
+    max_eod_pct        REAL,
+    close_eod_pct      REAL,
+    min_after_pct      REAL,
+    evaluated_at       TEXT,
+    FOREIGN KEY(signal_id) REFERENCES signal_events(signal_id)
+);

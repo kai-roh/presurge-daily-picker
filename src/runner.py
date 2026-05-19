@@ -437,6 +437,17 @@ def run_daily(settings: Settings, *, skip: set[str] | None = None) -> int:
             logger.exception("trade_log update failed: %s", exc)
             errors.append(f"trade_update: {type(exc).__name__}")
 
+    if "intraday_outcomes" not in skip:
+        try:
+            from src.intraday.outcomes import evaluate_pending_signals
+
+            n = evaluate_pending_signals(db)
+            if n:
+                logger.info("intraday signal outcomes evaluated: %d", n)
+        except Exception as exc:
+            logger.exception("intraday outcome update failed: %s", exc)
+            errors.append(f"intraday_outcomes: {type(exc).__name__}")
+
     if errors:
         msg = (
             f"Daily run {as_of} 부분 실패\n"

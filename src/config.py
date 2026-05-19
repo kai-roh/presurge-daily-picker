@@ -139,6 +139,13 @@ FINNHUB_RPS = 1
 STOCKTWITS_RPH = 200
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass
 class Settings:
     """런타임 설정. .env / 환경변수에서 로드."""
@@ -155,6 +162,15 @@ class Settings:
     claude_classify_model: str = "claude-sonnet-4-6"
     dry_run: bool = False
     log_level: str = "INFO"
+    intraday_enabled: bool = False
+    intraday_max_tickers: int = 20
+    intraday_interval_seconds: int = 300
+    intraday_use_yfinance: bool = True
+    intraday_use_finnhub_fallback: bool = True
+    intraday_min_tier: int = 3
+    intraday_max_alerts_per_loop: int = 5
+    intraday_buy_cooldown_minutes: int = 30
+    intraday_regular_session_only: bool = True
     missing_keys: list[str] = field(default_factory=list)
 
     @classmethod
@@ -172,6 +188,15 @@ class Settings:
             claude_classify_model=os.environ.get("CLAUDE_CLASSIFY_MODEL", "claude-sonnet-4-6"),
             dry_run=os.environ.get("DRY_RUN", "false").lower() in {"true", "1", "yes"},
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
+            intraday_enabled=_env_bool("INTRADAY_ENABLED", False),
+            intraday_max_tickers=int(os.environ.get("INTRADAY_MAX_TICKERS", "20")),
+            intraday_interval_seconds=int(os.environ.get("INTRADAY_INTERVAL_SECONDS", "300")),
+            intraday_use_yfinance=_env_bool("INTRADAY_USE_YFINANCE", True),
+            intraday_use_finnhub_fallback=_env_bool("INTRADAY_USE_FINNHUB_FALLBACK", True),
+            intraday_min_tier=int(os.environ.get("INTRADAY_MIN_TIER", "3")),
+            intraday_max_alerts_per_loop=int(os.environ.get("INTRADAY_MAX_ALERTS_PER_LOOP", "5")),
+            intraday_buy_cooldown_minutes=int(os.environ.get("INTRADAY_BUY_COOLDOWN_MINUTES", "30")),
+            intraday_regular_session_only=_env_bool("INTRADAY_REGULAR_SESSION_ONLY", True),
         )
         for name in ("polygon_api_key", "anthropic_api_key", "telegram_bot_token", "telegram_chat_id"):
             if not getattr(s, name):

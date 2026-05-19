@@ -46,5 +46,14 @@ class Finnhub:
             return {}
         return body
 
+    def quote(self, symbol: str) -> dict[str, Any]:
+        """현재 quote. c=current, h/l/o=day high/low/open, pc=previous close."""
+        params = {"symbol": symbol, "token": self.api_key}
+        resp = self.http.get("/quote", params=params)
+        body = resp.json()
+        if not isinstance(body, dict):
+            return {}
+        return body
+
     def close(self) -> None:
         self.http.close()

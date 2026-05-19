@@ -12,10 +12,11 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     env:
       POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
-      DATABASE_URL: sqlite:///data/presurge.db
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,8 +26,9 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m src.storage.db --init
       - run: python -m scripts.bootstrap_universe
-      - uses: actions/upload-artifact@v4
+      - if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: universe-${{ github.run_id }}
-          path: data/presurge.db
+          name: universe-refresh-${{ github.run_id }}
+          path: data/*.log
           retention-days: 14

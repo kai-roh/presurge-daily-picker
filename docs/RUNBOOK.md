@@ -48,24 +48,116 @@ launchd 실행 시 `set -a; source .env; set +a` 로 ENV 주입. GitHub Actions 
 
 ## 2. 옵션 C — Supabase 마이그레이션 (W6 작업, 4-8주 후 검토)
 
-GitHub Actions cron + Supabase Postgres로 전환:
-1. Supabase 프로젝트 생성 (free tier 500MB)
-2. `src/storage/db.py` 추상화 — SQLite/Supabase 전환 가능
-3. universe + daily_bars + filings + short_interest + pss_scores + watchlist_runs + trade_log 마이그레이션
-4. GitHub Actions secrets에 `DATABASE_URL=postgresql://...` 추가
-5. `.github/workflows/daily_pick.yml` cron 재활성화 (`gh workflow enable daily_pick.yml`)
+GitHub Actions cron + Supabase Postgres로 전환.
+
+Supabase connection string은 dashboard **Connect** 메뉴의 Postgres connection string을 사용한다. GitHub Actions 같은 임시 실행 환경은 IPv4 호환 pooler URL을 권장한다.
+
+1. Supabase 프로젝트 생성
+2. dashboard에서 Session/Transaction pooler connection string 복사
+3. 로컬 `.env`에 `SUPABASE_DATABASE_URL="postgresql://..."` 추가
+4. 스키마 생성 + 로컬 SQLite 데이터 이전
+
+```bash
+# 기본은 운영용 슬림 이전: 대형 time-series 테이블은 최근 220일만 이전.
+# 현재 SQLite 전체 DB는 600MB+라 Supabase Free 500MB 한도를 넘을 수 있음.
+python -m scripts.migrate_sqlite_to_supabase --replace
+
+# 24개월 백테스트 원장까지 전부 이전해야 하면 Pro plan 검토 후:
+python -m scripts.migrate_sqlite_to_supabase --replace --full
+```
+
+5. GitHub Actions secret 등록
+
+```bash
+gh secret set DATABASE_URL --body "$SUPABASE_DATABASE_URL"
+```
+
+6. workflows 재활성화
+
+```bash
+gh workflow enable daily_pick.yml
+gh workflow enable universe_refresh.yml
+gh workflow enable intraday_monitor.yml
+```
+
+7. smoke
+
+```bash
+gh workflow run daily_pick.yml -f skip="push"
+gh workflow run intraday_monitor.yml -f dry_run=true
+```
 
 이 시점에 launchd 비활성화:
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.presurge.daily.plist
+launchctl unload ~/Library/LaunchAgents/com.presurge.intraday.plist
 rm ~/Library/LaunchAgents/com.presurge.daily.plist
+rm ~/Library/LaunchAgents/com.presurge.intraday.plist
 ```
 
 GitHub Actions cron은 현재 `gh workflow disable`로 정지된 상태 (W5 가동 시 옵션 A 채택으로 SQLite local DB와 충돌 방지).
 
 ---
 
-## 3. 정상 동작 체크리스트
+## 3. 장중 모니터링 MVP — com.presurge.intraday
+
+Daily picker가 만든 watchlist 중 최대 20개를 미국 정규장 동안 5분 주기로 감시하고, BUY/TAKE_PROFIT/SELL/CAUTION watch signal을 Telegram alert chat으로 보낸다.
+
+### 3.1 수동 smoke
+
+```bash
+# 시장 시간 밖에서도 dry-run 1회 실행
+python -m scripts.run_intraday_monitor --dry-run --once --force-market-closed
+
+# 정규장 동안 dry-run loop
+python -m scripts.run_intraday_monitor --dry-run --loop
+
+# 실발송 loop
+python -m scripts.run_intraday_monitor --loop
+```
+
+로그:
+
+```bash
+tail -f data/intraday_monitor.log
+```
+
+### 3.2 launchd 등록
+
+`.env`에서 live alert를 켠다.
+
+```bash
+INTRADAY_ENABLED=1
+```
+
+```bash
+cp scripts/com.presurge.intraday.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.presurge.intraday.plist
+launchctl list | grep presurge
+```
+
+**스케줄**: 매일 **22:20 KST** 시작. 미국 서머타임에는 정규장 10분 전, 겨울에는 script가 약 70분 대기 후 장 시작부터 monitor한다.  
+**로그**: `data/intraday_monitor.log`, `data/intraday_launchd_stdout.log`, `data/intraday_launchd_stderr.log`.
+
+정지:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.presurge.intraday.plist
+```
+
+### 3.3 outcome 평가
+
+장 마감 후 또는 다음날 실행:
+
+```bash
+python -m scripts.evaluate_intraday_signals
+```
+
+결과는 `signal_outcomes`에 저장된다. 장중 signal 품질은 `signal_events`와 `signal_outcomes`를 조인해 본다.
+
+---
+
+## 4. 정상 동작 체크리스트
 
 매일 cron 후 확인:
 
@@ -85,36 +177,46 @@ watchlist Tier1=N Tier2=M
 
 ---
 
-## 4. 자주 발생하는 장애와 대응
+## 5. 자주 발생하는 장애와 대응
 
-### 4.1 Polygon 429 (rate limit)
+### 5.1 Polygon 429 (rate limit)
 - 원인: 무료 티어 5/min 한도 초과
 - 영향: bars 미적재, 그날 수익률 계산 일부 오차
 - 대응:
   - daily는 grouped daily 1콜/일이라 정상이면 안 발생
   - 발생 시 Polygon Stocks Starter ($29/월) 업그레이드 + `POLYGON_PERIOD_SECONDS=1` 변경
 
-### 4.2 EDGAR atom 응답 0건
+### 5.2 EDGAR atom 응답 0건
 - 원인: 24h 신규 8-K 없음 (주말, 공휴일 흔함)
 - 대응: 정상. PSS 점수에는 영향 없음 (이미 적재된 historical 8-K 사용).
 
-### 4.3 Telegram 400 parse error
+### 5.3 Telegram 400 parse error
 - 원인: 리포트 마크다운에 미escape된 특수문자
 - 대응: `claude_summarizer.py`의 generate_report 프롬프트 강화 또는 parse_mode를 HTML로 전환
 
-### 4.4 Claude API 비용 폭주
+### 5.4 Claude API 비용 폭주
 - 원인: 신규 1.01/1.02 8-K 다수 발생 시 분류 비용 증가
 - 가드: `step_classify_new_filings`의 `--max-cost-usd 5` 일별 cap
 - 대응: cap 초과해도 그날만 일부 분류 누락. 다음 cron이 backfill.
 
-### 4.5 SQLite cache 만료
+### 5.5 SQLite cache 만료
 - 원인: GitHub Actions cache 7일 미사용 시 자동 삭제
 - 대응: `actions/cache@v4`의 `restore-keys` prefix 매칭 → 가장 가까운 백업 복원
 - 영구 저장 필요 시 v0.3에서 Supabase 마이그레이션
 
+### 5.6 Intraday yfinance 429 / 빈 5분봉
+- 원인: Yahoo rate limit 또는 ticker별 데이터 공백
+- 영향: VWAP/volume 기반 BUY signal 누락
+- 대응: Finnhub quote fallback으로 price-only 감시. 반복되면 유료 intraday API 검토.
+
+### 5.7 Intraday 알림 과다
+- 원인: threshold 과민, 장중 급등장
+- 가드: ticker별 BUY 하루 2회, 동일 trigger cooldown 30분, loop당 최대 5개
+- 대응: `INTRADAY_MAX_ALERTS_PER_LOOP` 하향 또는 BUY rule threshold 상향
+
 ---
 
-## 5. 주간 / 월간 작업
+## 6. 주간 / 월간 작업
 
 | 주기 | 작업 | 명령 |
 |---|---|---|
@@ -127,7 +229,7 @@ watchlist Tier1=N Tier2=M
 
 ---
 
-## 6. 비상 정지 / 재시작
+## 7. 비상 정지 / 재시작
 
 ```bash
 # 정지: workflow 비활성화
@@ -149,7 +251,7 @@ python -m src.storage.db --init
 
 ---
 
-## 7. v0.2 데이터 한계 (W4 검증)
+## 8. v0.2 데이터 한계 (W4 검증)
 
 - **Pattern D (squeeze)**: 현재 SI snapshot 1회 (2026-04-15)만 → backtest에서 거의 0점. forward-only 운영 시 매주 갱신 필요.
 - **Pattern B (index)**: Russell 2000 alpha 약함 (W4 #5). max=5 다운, 향후 v0.3에서 ETF inclusion 별도 분석.

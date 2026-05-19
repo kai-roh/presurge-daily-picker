@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -14,6 +15,21 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+POSTGRES_SCHEMA_PATH = Path(__file__).parent / "schema_postgres.sql"
+
+UPSERT_CONFLICTS = {
+    "daily_bars": ("ticker", "trade_date"),
+    "filings": ("accession_no",),
+    "short_interest": ("ticker", "settle_date", "source"),
+    "social_mentions": ("ticker", "mention_date", "source"),
+    "toss_top_volume": ("rank_date", "rank"),
+    "pss_scores": ("score_date", "ticker"),
+    "watchlist_runs": ("run_date",),
+    "options_activity": ("snap_date", "ticker"),
+    "surge_events": ("surge_date", "ticker", "surge_type"),
+    "signal_events": ("trade_date", "ticker", "signal_type", "trigger_code", "signal_ts"),
+    "signal_outcomes": ("signal_id",),
+}
 
 
 def _parse_date(s: str | None) -> date | None:
@@ -33,17 +49,113 @@ def _resolve_db_path(url: str) -> Path:
     return Path(url).resolve()
 
 
+def _is_postgres_url(url: str) -> bool:
+    return url.startswith(("postgres://", "postgresql://"))
+
+
+class PostgresConnection:
+    """sqlite-ish execute facade over psycopg.
+
+    The codebase historically uses sqlite qmark parameters and a few SQLite
+    insert forms. This adapter keeps those call sites small while DATABASE_URL
+    can point at Supabase Postgres.
+    """
+
+    def __init__(self, url: str):
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError(
+                "Postgres DATABASE_URL requires psycopg. Install requirements.txt first."
+            ) from exc
+
+        self._psycopg = psycopg
+        self._conn = psycopg.connect(url, row_factory=dict_row, autocommit=True)
+        # Supabase transaction pooler is incompatible with prepared statements.
+        self._conn.prepare_threshold = None
+
+    def execute(self, sql: str, params: Any = None) -> Any:
+        sql, params = self._translate(sql, params)
+        return self._conn.execute(sql, params)
+
+    def executescript(self, sql: str) -> None:
+        for stmt in _split_sql_statements(sql):
+            self.execute(stmt)
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def _translate(self, sql: str, params: Any) -> tuple[str, Any]:
+        out = sql.strip()
+        out = self._translate_insert_or(out, params)
+        if isinstance(params, dict):
+            out = re.sub(r":([A-Za-z_][A-Za-z0-9_]*)", r"%(\1)s", out)
+        else:
+            out = out.replace("?", "%s")
+        return out, params
+
+    def _translate_insert_or(self, sql: str, params: Any) -> str:
+        m = re.match(
+            r"INSERT\s+OR\s+(REPLACE|IGNORE)\s+INTO\s+([A-Za-z_][A-Za-z0-9_]*)\s*"
+            r"\((.*?)\)\s*VALUES\s*\((.*?)\)\s*$",
+            sql,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not m:
+            return sql
+        mode, table, cols_raw, values_raw = m.groups()
+        cols = [c.strip() for c in cols_raw.replace("\n", " ").split(",")]
+        base = f"INSERT INTO {table}({cols_raw}) VALUES ({values_raw})"
+        if mode.upper() == "IGNORE":
+            return base + " ON CONFLICT DO NOTHING"
+        conflict = UPSERT_CONFLICTS.get(table)
+        if not conflict:
+            return base
+        update_cols = [c for c in cols if c not in conflict]
+        if not update_cols:
+            return base + f" ON CONFLICT ({', '.join(conflict)}) DO NOTHING"
+        updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+        return base + f" ON CONFLICT ({', '.join(conflict)}) DO UPDATE SET {updates}"
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    statements: list[str] = []
+    buf: list[str] = []
+    in_single = False
+    for ch in sql:
+        if ch == "'":
+            in_single = not in_single
+        if ch == ";" and not in_single:
+            stmt = "".join(buf).strip()
+            if stmt:
+                statements.append(stmt)
+            buf = []
+        else:
+            buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
 class Database:
     """경량 SQLite 래퍼. 멀티 프로세스 동시성은 GitHub Actions concurrency group으로 직렬화."""
 
-    def __init__(self, path: Path | str):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn: sqlite3.Connection | None = None
+    def __init__(self, path: Path | str, backend: str = "sqlite"):
+        self.backend = backend
+        self.url = str(path)
+        self.path = Path(path) if backend == "sqlite" else Path("<postgres>")
+        if backend == "sqlite":
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn: Any | None = None
 
     @property
-    def conn(self) -> sqlite3.Connection:
+    def conn(self) -> Any:
         if self._conn is None:
+            if self.backend == "postgres":
+                self._conn = PostgresConnection(self.url)
+                return self._conn
             # check_same_thread=False — 멀티스레드 워커가 같은 connection을 쓸 수
             # 있도록 허용. 쓰기 직렬화는 호출자가 lock으로 책임.
             self._conn = sqlite3.connect(
@@ -60,17 +172,15 @@ class Database:
             self._conn = None
 
     def init_schema(self) -> None:
-        sql = SCHEMA_PATH.read_text(encoding="utf-8")
+        schema_path = POSTGRES_SCHEMA_PATH if self.backend == "postgres" else SCHEMA_PATH
+        sql = schema_path.read_text(encoding="utf-8")
         self.conn.executescript(sql)
         self._migrate_in_place()
 
     def _migrate_in_place(self) -> None:
         """기존 DB에 누락된 컬럼/인덱스를 비파괴적으로 추가."""
         # trade_log: short-horizon pnl 컬럼 (W5+ 추가)
-        existing = {
-            row["name"]
-            for row in self.conn.execute("PRAGMA table_info(trade_log)").fetchall()
-        }
+        existing = self._table_columns("trade_log")
         new_cols = (
             "pnl_high_1d_pct",
             "pnl_close_1d_pct",
@@ -84,14 +194,24 @@ class Database:
                 self.conn.execute(f"ALTER TABLE trade_log ADD COLUMN {col} REAL")
 
         # pss_scores: pattern_g 컬럼 (v0.3 RVOL 추가)
-        pss_cols = {
-            row["name"]
-            for row in self.conn.execute("PRAGMA table_info(pss_scores)").fetchall()
-        }
+        pss_cols = self._table_columns("pss_scores")
         if "pattern_g" not in pss_cols:
             self.conn.execute(
                 "ALTER TABLE pss_scores ADD COLUMN pattern_g REAL NOT NULL DEFAULT 0"
             )
+
+    def _table_columns(self, table: str) -> set[str]:
+        if self.backend == "postgres":
+            rows = self.conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = %s",
+                (table,),
+            ).fetchall()
+            return {r["column_name"] for r in rows}
+        return {
+            row["name"]
+            for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -501,6 +621,130 @@ class Database:
             (datetime.utcnow().isoformat(), status, run_date.isoformat()),
         )
 
+    # ------------------------------------------------------------------
+    # Intraday signals
+    # ------------------------------------------------------------------
+    def latest_bar(self, ticker: str, on_or_before: date) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM daily_bars WHERE ticker = ? AND trade_date <= ? "
+            "ORDER BY trade_date DESC LIMIT 1",
+            (ticker, on_or_before.isoformat()),
+        ).fetchone()
+
+    def insert_signal_event(self, row: dict[str, Any]) -> int:
+        params = dict(row)
+        if "metadata_json" in params and not isinstance(params["metadata_json"], str):
+            params["metadata_json"] = json.dumps(params["metadata_json"], default=str)
+        sql = """
+        INSERT INTO signal_events(
+            signal_ts, trade_date, ticker, signal_type, trigger_code, price, ref_price,
+            pss_total, tier, triggered_patterns, source, metadata_json,
+            telegram_sent_at, telegram_status
+        ) VALUES (
+            :signal_ts, :trade_date, :ticker, :signal_type, :trigger_code, :price, :ref_price,
+            :pss_total, :tier, :triggered_patterns, :source, :metadata_json,
+            :telegram_sent_at, :telegram_status
+        )
+        """
+        if self.backend == "postgres":
+            row_id = self.conn.execute(sql + " RETURNING signal_id", params).fetchone()
+            return int(row_id["signal_id"])
+        self.conn.execute(sql, params)
+        return int(self.conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+
+    def mark_signal_telegram(self, signal_id: int, status: str) -> None:
+        self.conn.execute(
+            "UPDATE signal_events SET telegram_sent_at = ?, telegram_status = ? "
+            "WHERE signal_id = ?",
+            (datetime.utcnow().isoformat(), status, signal_id),
+        )
+
+    def recent_signal_exists(
+        self,
+        ticker: str,
+        trade_date: date,
+        signal_type: str,
+        trigger_code: str,
+        since_ts: str,
+    ) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT 1 FROM signal_events
+            WHERE ticker = ? AND trade_date = ? AND signal_type = ?
+              AND trigger_code = ? AND signal_ts >= ?
+            LIMIT 1
+            """,
+            (ticker, trade_date.isoformat(), signal_type, trigger_code, since_ts),
+        ).fetchone()
+        return row is not None
+
+    def count_signals(
+        self,
+        ticker: str,
+        trade_date: date,
+        signal_type: str | None = None,
+    ) -> int:
+        if signal_type:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM signal_events "
+                "WHERE ticker = ? AND trade_date = ? AND signal_type = ?",
+                (ticker, trade_date.isoformat(), signal_type),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM signal_events WHERE ticker = ? AND trade_date = ?",
+                (ticker, trade_date.isoformat()),
+            ).fetchone()
+        return int(row["n"] or 0)
+
+    def latest_signal(
+        self,
+        ticker: str,
+        trade_date: date,
+        signal_type: str | None = None,
+    ) -> sqlite3.Row | None:
+        if signal_type:
+            return self.conn.execute(
+                "SELECT * FROM signal_events WHERE ticker = ? AND trade_date = ? "
+                "AND signal_type = ? ORDER BY signal_ts DESC LIMIT 1",
+                (ticker, trade_date.isoformat(), signal_type),
+            ).fetchone()
+        return self.conn.execute(
+            "SELECT * FROM signal_events WHERE ticker = ? AND trade_date = ? "
+            "ORDER BY signal_ts DESC LIMIT 1",
+            (ticker, trade_date.isoformat()),
+        ).fetchone()
+
+    def upsert_signal_outcome(self, signal_id: int, outcome: dict[str, Any]) -> None:
+        params = {"signal_id": signal_id, **outcome}
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO signal_outcomes(
+                signal_id, max_10m_pct, close_10m_pct, max_30m_pct, close_30m_pct,
+                max_60m_pct, close_60m_pct, max_eod_pct, close_eod_pct,
+                min_after_pct, evaluated_at
+            ) VALUES (
+                :signal_id, :max_10m_pct, :close_10m_pct, :max_30m_pct, :close_30m_pct,
+                :max_60m_pct, :close_60m_pct, :max_eod_pct, :close_eod_pct,
+                :min_after_pct, :evaluated_at
+            )
+            """,
+            params,
+        )
+
+    def unevaluated_signals(self, trade_date: date | None = None) -> list[sqlite3.Row]:
+        sql = (
+            "SELECT s.* FROM signal_events s "
+            "LEFT JOIN signal_outcomes o ON o.signal_id = s.signal_id "
+            "WHERE o.signal_id IS NULL"
+        )
+        params: list[Any] = []
+        if trade_date:
+            sql += " AND s.trade_date = ?"
+            params.append(trade_date.isoformat())
+        sql += " ORDER BY s.signal_ts"
+        return self.conn.execute(sql, params).fetchall()
+
 
 _DB_SINGLETON: Database | None = None
 
@@ -509,8 +753,11 @@ def get_db(url: str | None = None) -> Database:
     global _DB_SINGLETON
     if _DB_SINGLETON is None:
         url = url or os.environ.get("DATABASE_URL", "sqlite:///data/presurge.db")
-        path = _resolve_db_path(url)
-        _DB_SINGLETON = Database(path)
+        if _is_postgres_url(url):
+            _DB_SINGLETON = Database(url, backend="postgres")
+        else:
+            path = _resolve_db_path(url)
+            _DB_SINGLETON = Database(path)
         _DB_SINGLETON.init_schema()
     return _DB_SINGLETON
 
