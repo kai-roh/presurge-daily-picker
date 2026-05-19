@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import logging
 import os
 import shlex
@@ -48,6 +50,20 @@ SEQUENCES = {
     "index_inclusion_events": ("event_id", "index_inclusion_events_event_id_seq"),
     "trade_log": ("trade_id", "trade_log_trade_id_seq"),
     "signal_events": ("signal_id", "signal_events_signal_id_seq"),
+}
+
+INTEGER_COLUMNS = {
+    "universe": {"float_shares", "is_common_stock"},
+    "daily_bars": {"volume"},
+    "short_interest": {"si_shares"},
+    "social_mentions": {"mentions", "rank"},
+    "toss_top_volume": {"rank"},
+    "pss_scores": {"tier"},
+    "options_activity": {"call_volume", "put_volume", "call_oi", "put_oi"},
+    "surge_events": {"prev_tier", "was_picked"},
+    "trade_log": {"trade_id", "entry_tier", "is_paper"},
+    "signal_events": {"signal_id", "tier"},
+    "signal_outcomes": {"signal_id"},
 }
 
 
@@ -138,7 +154,6 @@ def migrate(
         cols = _columns(src, table)
         if not cols:
             continue
-        sql = _insert_sql(table, cols)
         where, where_params = _where_for(table, cutoff, full)
         total = int(src.execute(f"SELECT COUNT(*) AS n FROM {table} {where}", where_params).fetchone()["n"])
         logger.info("Migrating %s (%d rows)", table, total)
@@ -151,10 +166,8 @@ def migrate(
             ).fetchall()
             if not rows:
                 break
-            with dst.transaction() as conn:
-                for row in rows:
-                    conn.execute(sql, dict(row))
-                    n += 1
+            _copy_rows(dst, table, cols, rows)
+            n += len(rows)
             offset += batch_size
             if n and n % max(batch_size * 10, 1000) == 0:
                 logger.info("  %s: %d/%d", table, n, total)
@@ -164,6 +177,36 @@ def migrate(
     dst.close()
     src.close()
     return counts
+
+
+def _copy_rows(db: Database, table: str, cols: list[str], rows: list[sqlite3.Row]) -> None:
+    if not rows:
+        return
+    col_sql = ", ".join(cols)
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    for row in rows:
+        writer.writerow([_copy_value(table, c, row[c]) for c in cols])
+    buf.seek(0)
+
+    # Access the underlying psycopg connection intentionally for COPY speed.
+    raw = db.conn._conn  # noqa: SLF001
+    with (
+        raw.cursor() as cur,
+        cur.copy(f"COPY {table} ({col_sql}) FROM STDIN WITH (FORMAT CSV)") as copy,
+    ):
+        copy.write(buf.getvalue())
+
+
+def _copy_value(table: str, col: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if col in INTEGER_COLUMNS.get(table, set()):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+    return value
 
 
 def _where_for(table: str, cutoff: str, full: bool) -> tuple[str, tuple[Any, ...]]:

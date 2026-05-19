@@ -149,6 +149,7 @@ class Database:
         if backend == "sqlite":
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: Any | None = None
+        self._score_cache: dict[str, Any] | None = None
 
     @property
     def conn(self) -> Any:
@@ -170,6 +171,92 @@ class Database:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+        self._score_cache = None
+
+    def enable_score_cache(self, as_of: date) -> None:
+        """Prefetch scoring inputs to avoid thousands of remote DB round-trips.
+
+        This is mostly for Supabase/Postgres execution in GitHub Actions. SQLite
+        is local and does not need it, but the cache is backend-agnostic.
+        """
+        from src.config import MARKET_CAP_MAX_USD, MARKET_CAP_MIN_USD
+
+        bars_start = (as_of - timedelta(days=90)).isoformat()
+        filings_start = (as_of - timedelta(days=190)).isoformat()
+        social_start = (as_of - timedelta(days=95)).isoformat()
+        toss_start = (as_of - timedelta(days=10)).isoformat()
+
+        universe_rows = self.conn.execute(
+            "SELECT * FROM universe WHERE market_cap_usd BETWEEN ? AND ? "
+            "AND is_common_stock = 1 ORDER BY ticker",
+            (MARKET_CAP_MIN_USD, MARKET_CAP_MAX_USD),
+        ).fetchall()
+        tickers = [r["ticker"] for r in universe_rows]
+        bars = self.conn.execute(
+            "SELECT * FROM daily_bars WHERE trade_date >= ? AND trade_date <= ? "
+            "ORDER BY ticker, trade_date",
+            (bars_start, as_of.isoformat()),
+        ).fetchall()
+        filings = self.conn.execute(
+            "SELECT * FROM filings WHERE substr(filed_at, 1, 10) >= ? "
+            "AND substr(filed_at, 1, 10) <= ? ORDER BY ticker, filed_at DESC",
+            (filings_start, as_of.isoformat()),
+        ).fetchall()
+        si_rows = self.conn.execute(
+            "SELECT * FROM short_interest WHERE settle_date <= ? ORDER BY ticker, settle_date DESC",
+            (as_of.isoformat(),),
+        ).fetchall()
+        social = self.conn.execute(
+            "SELECT * FROM social_mentions WHERE mention_date >= ? AND mention_date <= ?",
+            (social_start, as_of.isoformat()),
+        ).fetchall()
+        toss = self.conn.execute(
+            "SELECT * FROM toss_top_volume WHERE rank_date >= ? AND rank_date <= ?",
+            (toss_start, as_of.isoformat()),
+        ).fetchall()
+        index_events = self.conn.execute(
+            "SELECT ticker, index_name, announced_at, effective_at, source "
+            "FROM index_inclusion_events WHERE effective_at IS NULL OR effective_at >= ?",
+            ((as_of - timedelta(days=7)).isoformat(),),
+        ).fetchall()
+
+        bars_by_ticker: dict[str, list[Any]] = {}
+        for r in bars:
+            bars_by_ticker.setdefault(r["ticker"], []).append(r)
+
+        filings_by_ticker: dict[str, list[Any]] = {}
+        for r in filings:
+            filings_by_ticker.setdefault(r["ticker"], []).append(r)
+
+        si_latest: dict[str, Any] = {}
+        for r in si_rows:
+            si_latest.setdefault(r["ticker"], r)
+
+        social_by_key: dict[tuple[str, str], list[Any]] = {}
+        for r in social:
+            social_by_key.setdefault((r["ticker"], r["source"]), []).append(r)
+
+        toss_tickers = {
+            r["ticker"]
+            for r in toss
+            if r["rank"] is not None and int(r["rank"]) <= 30
+        }
+
+        events_by_ticker: dict[str, list[Any]] = {}
+        for r in index_events:
+            events_by_ticker.setdefault(r["ticker"], []).append(r)
+
+        self._score_cache = {
+            "as_of": as_of,
+            "tickers": tickers,
+            "universe": {r["ticker"]: r for r in universe_rows},
+            "bars": bars_by_ticker,
+            "filings": filings_by_ticker,
+            "short_interest": si_latest,
+            "social": social_by_key,
+            "toss_tickers": toss_tickers,
+            "index_events": events_by_ticker,
+        }
 
     def init_schema(self) -> None:
         schema_path = POSTGRES_SCHEMA_PATH if self.backend == "postgres" else SCHEMA_PATH
@@ -250,17 +337,24 @@ class Database:
         return n
 
     def get_market_cap(self, ticker: str) -> float | None:
+        if self._score_cache is not None:
+            row = self._score_cache["universe"].get(ticker)
+            return row["market_cap_usd"] if row else None
         row = self.conn.execute(
             "SELECT market_cap_usd FROM universe WHERE ticker = ?", (ticker,)
         ).fetchone()
         return row["market_cap_usd"] if row else None
 
     def get_universe_row(self, ticker: str) -> sqlite3.Row | None:
+        if self._score_cache is not None:
+            return self._score_cache["universe"].get(ticker)
         return self.conn.execute(
             "SELECT * FROM universe WHERE ticker = ?", (ticker,)
         ).fetchone()
 
     def universe_tickers(self, mcap_min: float, mcap_max: float) -> list[str]:
+        if self._score_cache is not None:
+            return list(self._score_cache["tickers"])
         rows = self.conn.execute(
             "SELECT ticker FROM universe WHERE market_cap_usd BETWEEN ? AND ? "
             "AND is_common_stock = 1 ORDER BY ticker",
@@ -292,6 +386,12 @@ class Database:
         return n
 
     def get_close(self, ticker: str, on: date) -> float | None:
+        if self._score_cache is not None:
+            rows = [
+                r for r in self._score_cache["bars"].get(ticker, [])
+                if r["trade_date"] <= on.isoformat() and r["close"] is not None
+            ]
+            return float(rows[-1]["close"]) if rows else None
         row = self.conn.execute(
             "SELECT close FROM daily_bars WHERE ticker = ? AND trade_date <= ? "
             "ORDER BY trade_date DESC LIMIT 1",
@@ -301,6 +401,12 @@ class Database:
 
     def latest_volume(self, ticker: str, as_of: date) -> int | None:
         """as_of 이전 또는 당일의 가장 최근 거래일 volume."""
+        if self._score_cache is not None:
+            rows = [
+                r for r in self._score_cache["bars"].get(ticker, [])
+                if r["trade_date"] <= as_of.isoformat() and r["volume"] is not None
+            ]
+            return int(float(rows[-1]["volume"])) if rows else None
         row = self.conn.execute(
             "SELECT volume FROM daily_bars WHERE ticker = ? AND trade_date <= ? "
             "AND volume IS NOT NULL ORDER BY trade_date DESC LIMIT 1",
@@ -310,6 +416,19 @@ class Database:
 
     def avg_volume(self, ticker: str, as_of: date, lookback_days: int) -> float | None:
         """as_of 이전 lookback_days 영업일 평균 거래량 (최근 거래일 자체는 제외)."""
+        if self._score_cache is not None:
+            rows = [
+                r for r in self._score_cache["bars"].get(ticker, [])
+                if r["trade_date"] <= as_of.isoformat()
+                and r["volume"] is not None
+                and float(r["volume"]) > 0
+            ]
+            if len(rows) < 2:
+                return None
+            sample = rows[-(lookback_days + 1):-1]
+            if not sample:
+                return None
+            return sum(float(r["volume"]) for r in sample) / len(sample)
         # 최근 거래일 제외 → as_of 이전의 가장 최근 거래일 직전 N일 평균
         latest = self.conn.execute(
             "SELECT MAX(trade_date) AS d FROM daily_bars WHERE ticker = ? AND trade_date <= ?",
@@ -331,6 +450,20 @@ class Database:
         return float(row["v"]) if row and row["v"] else None
 
     def price_change_pct(self, ticker: str, as_of: date, days: int) -> float | None:
+        if self._score_cache is not None:
+            rows = [
+                r for r in self._score_cache["bars"].get(ticker, [])
+                if r["trade_date"] <= as_of.isoformat() and r["close"] is not None
+            ]
+            if not rows:
+                return None
+            end = float(rows[-1]["close"])
+            target = (as_of - timedelta(days=days)).isoformat()
+            start_rows = [r for r in rows if r["trade_date"] <= target and r["close"]]
+            if not start_rows:
+                return None
+            start = float(start_rows[-1]["close"])
+            return (end - start) / start if start else None
         end = self.get_close(ticker, as_of)
         if end is None:
             return None
@@ -400,9 +533,15 @@ class Database:
         keywords: list[str] | None = None,
     ) -> list[sqlite3.Row]:
         cutoff = (datetime.combine(as_of, datetime.min.time()) - timedelta(hours=hours_back)).isoformat()
-        sql = "SELECT * FROM filings WHERE ticker = ? AND filed_at >= ? AND filed_at <= ?"
-        params: list[Any] = [ticker, cutoff, as_of.isoformat() + "T23:59:59"]
-        rows = self.conn.execute(sql, params).fetchall()
+        if self._score_cache is not None:
+            rows = [
+                r for r in self._score_cache["filings"].get(ticker, [])
+                if r["filed_at"] >= cutoff and r["filed_at"] <= as_of.isoformat() + "T23:59:59"
+            ]
+        else:
+            sql = "SELECT * FROM filings WHERE ticker = ? AND filed_at >= ? AND filed_at <= ?"
+            params: list[Any] = [ticker, cutoff, as_of.isoformat() + "T23:59:59"]
+            rows = self.conn.execute(sql, params).fetchall()
         out = []
         for r in rows:
             row_items = (r["items"] or "").split(",")
@@ -432,6 +571,8 @@ class Database:
         return n
 
     def latest_short_interest(self, ticker: str, as_of: date) -> sqlite3.Row | None:
+        if self._score_cache is not None:
+            return self._score_cache["short_interest"].get(ticker)
         return self.conn.execute(
             "SELECT * FROM short_interest WHERE ticker = ? AND settle_date <= ? "
             "ORDER BY settle_date DESC LIMIT 1",
@@ -454,6 +595,16 @@ class Database:
         return n
 
     def avg_mentions(self, ticker: str, as_of: date, days: int, source: str) -> float | None:
+        if self._score_cache is not None:
+            start = (as_of - timedelta(days=days)).isoformat()
+            vals = [
+                r["mentions"]
+                for r in self._score_cache["social"].get((ticker, source), [])
+                if r["mention_date"] >= start
+                and r["mention_date"] <= as_of.isoformat()
+                and r["mentions"] is not None
+            ]
+            return sum(vals) / len(vals) if vals else None
         start = (as_of - timedelta(days=days)).isoformat()
         row = self.conn.execute(
             "SELECT AVG(mentions) AS m FROM social_mentions "
@@ -463,6 +614,16 @@ class Database:
         return row["m"] if row and row["m"] is not None else None
 
     def mention_growth(self, ticker: str, as_of: date, source: str) -> float | None:
+        if self._score_cache is not None:
+            rows = {
+                r["mention_date"]: r
+                for r in self._score_cache["social"].get((ticker, source), [])
+            }
+            today = rows.get(as_of.isoformat())
+            prev = rows.get((as_of - timedelta(days=1)).isoformat())
+            if not today or not prev or not prev["mentions"]:
+                return None
+            return today["mentions"] / prev["mentions"]
         today = self.conn.execute(
             "SELECT mentions FROM social_mentions WHERE ticker = ? AND source = ? AND mention_date = ?",
             (ticker, source, as_of.isoformat()),
@@ -489,6 +650,8 @@ class Database:
                 )
 
     def in_toss_top30(self, ticker: str, as_of: date) -> bool:
+        if self._score_cache is not None:
+            return ticker in self._score_cache["toss_tickers"]
         # 직전 7일 내 1번이라도 top 30 진입했으면 True (단발 노이즈 vs 안정 인기 분리는 v0.3)
         start = (as_of - timedelta(days=7)).isoformat()
         row = self.conn.execute(
@@ -512,6 +675,22 @@ class Database:
 
     def index_inclusion_events(self, ticker: str, as_of: date) -> list[dict[str, Any]]:
         """Pattern B 헬퍼. announced_at <= as_of, effective_at >= as_of - 7d 인 이벤트만."""
+        if self._score_cache is not None:
+            cutoff = (as_of - timedelta(days=7)).isoformat()
+            out = []
+            for r in self._score_cache["index_events"].get(ticker, []):
+                if r["announced_at"] and r["announced_at"] > as_of.isoformat():
+                    continue
+                if r["effective_at"] and r["effective_at"] < cutoff:
+                    continue
+                out.append({
+                    "ticker": r["ticker"],
+                    "index_name": r["index_name"],
+                    "announced_at": _parse_date(r["announced_at"]),
+                    "effective_at": _parse_date(r["effective_at"]),
+                    "source": r["source"],
+                })
+            return out
         cutoff = (as_of - timedelta(days=7)).isoformat()
         rows = self.conn.execute(
             """

@@ -123,6 +123,8 @@ def _has_earnings_within(db: Database, ticker: str, as_of: date, days: int) -> b
 def compute_universe(as_of: date, db: Database) -> list[TickerScore]:
     from src.config import MARKET_CAP_MAX_USD, MARKET_CAP_MIN_USD
 
+    if getattr(db, "backend", "sqlite") == "postgres":
+        db.enable_score_cache(as_of)
     tickers = db.universe_tickers(MARKET_CAP_MIN_USD, MARKET_CAP_MAX_USD)
     logger.info("Computing PSS for %d tickers as of %s", len(tickers), as_of)
     out: list[TickerScore] = []
