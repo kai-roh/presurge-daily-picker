@@ -146,6 +146,10 @@ def classify_tiers(scores: list[TickerScore]) -> dict[int, list[TickerScore]]:
 
 
 def persist(scores: list[TickerScore], as_of: date, db: Database) -> None:
+    bulk = getattr(db, "upsert_pss_many", None)
+    if callable(bulk):
+        bulk(as_of, [(s.ticker, s.to_db_row()) for s in scores])
+        return
     for s in scores:
         db.upsert_pss(as_of, s.ticker, s.to_db_row())
 

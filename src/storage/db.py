@@ -1,6 +1,8 @@
 """SQLite 추상화. URL 파싱 + 스키마 init + 헬퍼 쿼리."""
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import os
@@ -755,6 +757,82 @@ class Database:
             # Pattern B 의 events 안에 date 객체가 들어있을 수 있어 default=str 필요
             params["metadata_json"] = json.dumps(params["metadata_json"], default=str)
         self.conn.execute(sql, params)
+
+    def upsert_pss_many(self, score_date: date, rows: Iterable[tuple[str, dict[str, Any]]]) -> int:
+        if self.backend != "postgres":
+            n = 0
+            for ticker, breakdown in rows:
+                self.upsert_pss(score_date, ticker, breakdown)
+                n += 1
+            return n
+
+        prepared: list[dict[str, Any]] = []
+        for ticker, breakdown in rows:
+            metadata = breakdown.get("metadata_json")
+            if metadata is not None and not isinstance(metadata, str):
+                metadata = json.dumps(metadata, default=str)
+            prepared.append({
+                "score_date": score_date.isoformat(),
+                "ticker": ticker,
+                **breakdown,
+                "metadata_json": metadata,
+            })
+        if not prepared:
+            return 0
+
+        cols = [
+            "score_date", "ticker", "pattern_a", "pattern_b", "pattern_c",
+            "pattern_d", "pattern_e", "pattern_f", "pattern_g", "bonus_toss",
+            "penalty_run", "penalty_earn", "pss_total", "tier",
+            "triggered_patterns", "metadata_json",
+        ]
+        temp = "tmp_pss_scores"
+        raw = self.conn._conn  # noqa: SLF001
+        raw.execute("DROP TABLE IF EXISTS tmp_pss_scores")
+        raw.execute("CREATE TEMP TABLE tmp_pss_scores (LIKE pss_scores INCLUDING DEFAULTS)")
+        buf = io.StringIO()
+        writer = csv.writer(buf, lineterminator="\n")
+        for row in prepared:
+            writer.writerow([row.get(c) for c in cols])
+        buf.seek(0)
+        with (
+            raw.cursor() as cur,
+            cur.copy(
+                f"COPY {temp} ({', '.join(cols)}) FROM STDIN WITH (FORMAT CSV)"
+            ) as copy,
+        ):
+            copy.write(buf.getvalue())
+        raw.execute(
+            """
+            INSERT INTO pss_scores(
+                score_date, ticker, pattern_a, pattern_b, pattern_c, pattern_d,
+                pattern_e, pattern_f, pattern_g, bonus_toss, penalty_run,
+                penalty_earn, pss_total, tier, triggered_patterns, metadata_json
+            )
+            SELECT
+                score_date, ticker, pattern_a, pattern_b, pattern_c, pattern_d,
+                pattern_e, pattern_f, pattern_g, bonus_toss, penalty_run,
+                penalty_earn, pss_total, tier, triggered_patterns, metadata_json
+            FROM tmp_pss_scores
+            ON CONFLICT (score_date, ticker) DO UPDATE SET
+                pattern_a = EXCLUDED.pattern_a,
+                pattern_b = EXCLUDED.pattern_b,
+                pattern_c = EXCLUDED.pattern_c,
+                pattern_d = EXCLUDED.pattern_d,
+                pattern_e = EXCLUDED.pattern_e,
+                pattern_f = EXCLUDED.pattern_f,
+                pattern_g = EXCLUDED.pattern_g,
+                bonus_toss = EXCLUDED.bonus_toss,
+                penalty_run = EXCLUDED.penalty_run,
+                penalty_earn = EXCLUDED.penalty_earn,
+                pss_total = EXCLUDED.pss_total,
+                tier = EXCLUDED.tier,
+                triggered_patterns = EXCLUDED.triggered_patterns,
+                metadata_json = EXCLUDED.metadata_json
+            """
+        )
+        raw.execute("DROP TABLE IF EXISTS tmp_pss_scores")
+        return len(prepared)
 
     def get_pss(self, score_date: date, ticker: str) -> sqlite3.Row | None:
         return self.conn.execute(
