@@ -55,6 +55,7 @@ Supabase connection string은 dashboard **Connect** 메뉴의 Postgres connectio
 1. Supabase 프로젝트 생성
 2. dashboard에서 Session/Transaction pooler connection string 복사
 3. 로컬 `.env`에 `SUPABASE_DATABASE_URL="postgresql://..."` 추가
+   - `psql -h ... -U ...` 형태를 붙여넣는 경우 `SUPABASE_DB_PASSWORD`도 함께 필요
 4. 스키마 생성 + 로컬 SQLite 데이터 이전
 
 ```bash

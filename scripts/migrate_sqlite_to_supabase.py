@@ -12,11 +12,13 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shlex
 import sqlite3
 import sys
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 
@@ -51,11 +53,47 @@ SEQUENCES = {
 
 def _target_url(cli_url: str | None) -> str:
     url = cli_url or os.environ.get("SUPABASE_DATABASE_URL") or os.environ.get("DATABASE_URL", "")
+    url = url.strip().strip('"').strip("'")
     if not url.startswith(("postgres://", "postgresql://")):
+        if url.startswith("psql "):
+            return _psql_command_to_url(url)
         raise SystemExit(
-            "Supabase/Postgres target URL not found. Set SUPABASE_DATABASE_URL or pass --target-url."
+            "Supabase/Postgres target URL not found. Set SUPABASE_DATABASE_URL to a "
+            "postgresql:// URI, or use a psql command plus PGPASSWORD/SUPABASE_DB_PASSWORD."
         )
     return url
+
+
+def _psql_command_to_url(command: str) -> str:
+    parts = shlex.split(command)
+    values: dict[str, str] = {}
+    flag_map = {
+        "-h": "host",
+        "--host": "host",
+        "-p": "port",
+        "--port": "port",
+        "-d": "dbname",
+        "--dbname": "dbname",
+        "-U": "user",
+        "--username": "user",
+    }
+    for i, part in enumerate(parts):
+        key = flag_map.get(part)
+        if key and i + 1 < len(parts):
+            values[key] = parts[i + 1]
+    password = os.environ.get("SUPABASE_DB_PASSWORD") or os.environ.get("PGPASSWORD")
+    missing = [k for k in ("host", "port", "dbname", "user") if not values.get(k)]
+    if missing or not password:
+        raise SystemExit(
+            "psql command target requires host/port/db/user plus password. "
+            "Set PGPASSWORD or SUPABASE_DB_PASSWORD, or paste the Supabase URI form."
+        )
+    user = quote(values["user"], safe="")
+    pw = quote(password, safe="")
+    return (
+        f"postgresql://{user}:{pw}@{values['host']}:{values['port']}/"
+        f"{values['dbname']}?sslmode=require"
+    )
 
 
 def _sqlite_conn(path: Path) -> sqlite3.Connection:
