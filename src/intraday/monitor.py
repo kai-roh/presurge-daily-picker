@@ -5,10 +5,11 @@ import json
 import logging
 import time
 from datetime import date, datetime, timedelta
+from datetime import time as dt_time
 from typing import Any
 
 from src.config import Settings
-from src.intraday.calendar import session_for
+from src.intraday.calendar import KST, session_for
 from src.intraday.market_data import TickerSnapshot, fetch_snapshots
 from src.intraday.signals import IntradaySignalEngine, Signal, SignalContext
 from src.intraday.watchlist import load_intraday_watchlist
@@ -50,6 +51,8 @@ class IntradayMonitor:
             candidates={c.ticker: c for c in candidates},
         )
 
+        now = as_of or datetime.utcnow()
+        session = session_for(now, include_extended=True)
         sent_or_stored = 0
         alerts_this_loop = 0
         for candidate in candidates:
@@ -57,16 +60,17 @@ class IntradayMonitor:
             if not snap or snap.current_price is None:
                 logger.debug("No price snapshot for %s", candidate.ticker)
                 continue
-            ctx = self._context(snap, as_of or datetime.utcnow())
+            snap.metadata["session"] = session.session_label
+            ctx = self._context(snap, now)
             signals = self.engine.evaluate(snap, ctx)
             for signal in signals:
                 if alerts_this_loop >= self.settings.intraday_max_alerts_per_loop:
                     logger.info("alert cap reached for this loop")
                     return sent_or_stored
-                if not self._should_store_signal(snap, signal, as_of or datetime.utcnow()):
+                if not self._should_store_signal(snap, signal, now):
                     continue
-                signal_id = self._store_signal(snap, signal, as_of or datetime.utcnow(), dry_run)
-                status = self._push_signal(signal_id, snap, signal, dry_run)
+                signal_id = self._store_signal(snap, signal, now, dry_run)
+                status = self._push_signal(signal_id, snap, signal, now, dry_run)
                 self.db.mark_signal_telegram(signal_id, status)
                 sent_or_stored += 1
                 alerts_this_loop += 1
@@ -75,7 +79,9 @@ class IntradayMonitor:
     def run_loop(self, force_market_closed: bool = False, dry_run: bool = False) -> int:
         total = 0
         while True:
-            session = session_for()
+            session = session_for(
+                include_extended=self.settings.intraday_include_extended_hours
+            )
             if not session.is_open and not force_market_closed:
                 if session.now_et < session.open_et and session.now_et.weekday() < 5:
                     wait = min(
@@ -93,18 +99,28 @@ class IntradayMonitor:
             if force_market_closed:
                 time.sleep(self.settings.intraday_interval_seconds)
                 continue
-            session = session_for()
+            session = session_for(
+                include_extended=self.settings.intraday_include_extended_hours
+            )
             if session.now_et >= session.close_et:
                 logger.info("market close reached; exiting intraday monitor")
                 return total
             time.sleep(self.settings.intraday_interval_seconds)
 
     def _context(self, snap: TickerSnapshot, as_of: datetime) -> SignalContext:
+        live_trade = self.db.open_live_trade(snap.ticker)
         latest_buy = self.db.latest_signal(snap.ticker, snap.trade_date, "BUY_WATCH")
         latest_sell = self.db.latest_signal(snap.ticker, snap.trade_date, "SELL_WATCH")
         latest_caution = self.db.latest_signal(snap.ticker, snap.trade_date, "CAUTION")
         active_buy_price: float | None = None
-        if latest_buy and _row_ts(latest_buy) >= max(_row_ts(latest_sell), _row_ts(latest_caution)):
+        if live_trade and live_trade["entry_price"] is not None:
+            active_buy_price = float(live_trade["entry_price"])
+            snap.metadata["active_position"] = {
+                "source": "telegram_buy",
+                "entry_date": live_trade["entry_date"],
+                "entry_price": active_buy_price,
+            }
+        elif latest_buy and _row_ts(latest_buy) >= max(_row_ts(latest_sell), _row_ts(latest_caution)):
             active_buy_price = float(latest_buy["price"])
         return SignalContext(
             as_of=as_of,
@@ -166,12 +182,23 @@ class IntradayMonitor:
         signal_id: int,
         snap: TickerSnapshot,
         signal: Signal,
+        as_of: datetime,
         dry_run: bool,
     ) -> str:
         if dry_run:
             logger.info("[DRY] signal %s %s %s %.2f", snap.ticker, signal.signal_type,
                         signal.trigger_code, signal.price)
             return "dry_run"
+        if self.settings.intraday_mute_quiet_hours and _is_quiet_kst(
+            as_of,
+            self.settings.intraday_quiet_start_kst,
+            self.settings.intraday_quiet_end_kst,
+        ):
+            logger.info(
+                "quiet hours muted signal=%s %s %s",
+                signal_id, snap.ticker, signal.signal_type,
+            )
+            return "muted_quiet_hours"
         chat_id = self.settings.telegram_alert_chat_id or self.settings.telegram_chat_id
         if not self.settings.telegram_bot_token or not chat_id:
             logger.warning("Telegram config missing; signal %s stored only", signal_id)
@@ -189,6 +216,7 @@ def format_signal_message(snap: TickerSnapshot, signal: Signal) -> str:
     pss = f"{snap.pss_total:.1f}" if snap.pss_total is not None else "n/a"
     tier = str(snap.tier) if snap.tier is not None else "n/a"
     patterns = snap.triggered_patterns or "-"
+    session = snap.metadata.get("session")
     header = f"[{signal.signal_type}] {snap.ticker}"
     if signal.signal_type == "TAKE_PROFIT":
         pnl = signal.metadata.get("signal_pnl")
@@ -196,10 +224,12 @@ def format_signal_message(snap: TickerSnapshot, signal: Signal) -> str:
             header = f"[TAKE PROFIT] {snap.ticker} {pnl * 100:+.1f}%"
     lines = [
         header,
+        f"Session: {session}" if session else "",
         f"PSS {pss} / Tier {tier} / {patterns}",
         f"Trigger: {signal.trigger_code}",
         f"Price: {signal.price:.4g}",
     ]
+    lines = [line for line in lines if line]
     if signal.ref_price:
         lines.append(f"Ref: {signal.ref_price:.4g}")
     if signal.signal_type == "BUY_WATCH":
@@ -225,3 +255,28 @@ def format_signal_message(snap: TickerSnapshot, signal: Signal) -> str:
 
 def _row_ts(row: Any) -> str:
     return row["signal_ts"] if row else ""
+
+
+def _is_quiet_kst(as_of: datetime, start_hhmm: str, end_hhmm: str) -> bool:
+    local = _ensure_aware(as_of).astimezone(KST).time()
+    start = _parse_hhmm(start_hhmm, dt_time(3, 0))
+    end = _parse_hhmm(end_hhmm, dt_time(6, 0))
+    if start <= end:
+        return start <= local < end
+    return local >= start or local < end
+
+
+def _parse_hhmm(raw: str, default: dt_time) -> dt_time:
+    try:
+        hour, minute = raw.split(":", 1)
+        return dt_time(int(hour), int(minute))
+    except (AttributeError, TypeError, ValueError):
+        return default
+
+
+def _ensure_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        from src.intraday.calendar import UTC
+
+        return value.replace(tzinfo=UTC)
+    return value

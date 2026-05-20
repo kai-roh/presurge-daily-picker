@@ -60,7 +60,10 @@ def fetch_snapshots(
 
     missing = set(tickers)
     if settings.intraday_use_yfinance:
-        yf_bars = _fetch_yfinance_bars(tickers)
+        yf_bars = _fetch_yfinance_bars(
+            tickers,
+            prepost=settings.intraday_yfinance_prepost,
+        )
         for ticker, bars in yf_bars.items():
             if not bars:
                 continue
@@ -111,7 +114,11 @@ def _base_snapshot(
     return snap
 
 
-def _fetch_yfinance_bars(tickers: list[str]) -> dict[str, list[IntradayBar]]:
+def _fetch_yfinance_bars(
+    tickers: list[str],
+    *,
+    prepost: bool = False,
+) -> dict[str, list[IntradayBar]]:
     if not tickers:
         return {}
     try:
@@ -127,7 +134,7 @@ def _fetch_yfinance_bars(tickers: list[str]) -> dict[str, list[IntradayBar]]:
             interval="5m",
             group_by="ticker",
             auto_adjust=False,
-            prepost=False,
+            prepost=prepost,
             threads=True,
             progress=False,
         )

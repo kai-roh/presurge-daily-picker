@@ -1018,6 +1018,13 @@ class Database:
             (ticker, trade_date.isoformat()),
         ).fetchone()
 
+    def open_live_trade(self, ticker: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM trade_log WHERE ticker = ? AND is_paper = 0 "
+            "AND exit_price IS NULL ORDER BY entry_date DESC, trade_id DESC LIMIT 1",
+            (ticker,),
+        ).fetchone()
+
     def upsert_signal_outcome(self, signal_id: int, outcome: dict[str, Any]) -> None:
         params = {"signal_id": signal_id, **outcome}
         self.conn.execute(

@@ -171,6 +171,11 @@ class Settings:
     intraday_max_alerts_per_loop: int = 5
     intraday_buy_cooldown_minutes: int = 30
     intraday_regular_session_only: bool = True
+    intraday_include_extended_hours: bool = False
+    intraday_yfinance_prepost: bool = False
+    intraday_quiet_start_kst: str = "03:00"
+    intraday_quiet_end_kst: str = "06:00"
+    intraday_mute_quiet_hours: bool = True
     missing_keys: list[str] = field(default_factory=list)
 
     @classmethod
@@ -197,6 +202,11 @@ class Settings:
             intraday_max_alerts_per_loop=int(os.environ.get("INTRADAY_MAX_ALERTS_PER_LOOP", "5")),
             intraday_buy_cooldown_minutes=int(os.environ.get("INTRADAY_BUY_COOLDOWN_MINUTES", "30")),
             intraday_regular_session_only=_env_bool("INTRADAY_REGULAR_SESSION_ONLY", True),
+            intraday_include_extended_hours=_env_bool("INTRADAY_INCLUDE_EXTENDED_HOURS", False),
+            intraday_yfinance_prepost=_env_bool("INTRADAY_YFINANCE_PREPOST", False),
+            intraday_quiet_start_kst=os.environ.get("INTRADAY_QUIET_START_KST", "03:00"),
+            intraday_quiet_end_kst=os.environ.get("INTRADAY_QUIET_END_KST", "06:00"),
+            intraday_mute_quiet_hours=_env_bool("INTRADAY_MUTE_QUIET_HOURS", True),
         )
         for name in ("polygon_api_key", "anthropic_api_key", "telegram_bot_token", "telegram_chat_id"):
             if not getattr(s, name):

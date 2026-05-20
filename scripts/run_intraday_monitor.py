@@ -58,9 +58,13 @@ def main(argv: list[str] | None = None) -> int:
     db = get_db(settings.database_url)
     monitor = IntradayMonitor(db, settings)
 
-    session = session_for()
+    session = session_for(include_extended=settings.intraday_include_extended_hours)
     if args.once:
-        if settings.intraday_regular_session_only and not session.is_open and not args.force_market_closed:
+        enforce_session = (
+            settings.intraday_regular_session_only
+            or settings.intraday_include_extended_hours
+        )
+        if enforce_session and not session.is_open and not args.force_market_closed:
             logging.info("market closed for %s; use --force-market-closed for smoke", session.trade_date)
             return 0
         n = monitor.run_once(session.trade_date, session.now_et, dry_run=args.dry_run)
