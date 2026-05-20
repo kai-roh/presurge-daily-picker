@@ -108,7 +108,7 @@ KST 운영 시간대:
 
 - 17:00-19:55: early premarket, 15분 주기
 - 20:00-02:55: late premarket + 정규장 핵심 구간, 5분 주기
-- 03:00-05:55: quiet hours, 15분 주기 관찰만 하고 Telegram 알림은 mute
+- 03:00-05:55: late regular/power-hour, 15분 주기. 알림은 보내지만 실제 실행 난이도가 높은 시간대로 기록한다.
 - 06:00-10:55: postmarket/미국 겨울시간 보강, 10분 주기
 
 SELL/TAKE_PROFIT 알림은 시스템 BUY_WATCH 이후에도 나오지만, 사용자가 Telegram에 `/buy TICKER PRICE` 또는 `매수 TICKER PRICE`를 보내 실제 진입을 기록하면 그 live entry price를 우선 기준으로 삼는다.
@@ -143,7 +143,7 @@ INTRADAY_ENABLED=1
 INTRADAY_INCLUDE_EXTENDED_HOURS=1
 INTRADAY_YFINANCE_PREPOST=1
 INTRADAY_REGULAR_SESSION_ONLY=0
-INTRADAY_MUTE_QUIET_HOURS=1
+INTRADAY_MUTE_QUIET_HOURS=0
 INTRADAY_QUIET_START_KST=03:00
 INTRADAY_QUIET_END_KST=06:00
 ```

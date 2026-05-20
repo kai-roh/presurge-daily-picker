@@ -175,7 +175,7 @@ class Settings:
     intraday_yfinance_prepost: bool = False
     intraday_quiet_start_kst: str = "03:00"
     intraday_quiet_end_kst: str = "06:00"
-    intraday_mute_quiet_hours: bool = True
+    intraday_mute_quiet_hours: bool = False
     missing_keys: list[str] = field(default_factory=list)
 
     @classmethod
@@ -206,7 +206,7 @@ class Settings:
             intraday_yfinance_prepost=_env_bool("INTRADAY_YFINANCE_PREPOST", False),
             intraday_quiet_start_kst=os.environ.get("INTRADAY_QUIET_START_KST", "03:00"),
             intraday_quiet_end_kst=os.environ.get("INTRADAY_QUIET_END_KST", "06:00"),
-            intraday_mute_quiet_hours=_env_bool("INTRADAY_MUTE_QUIET_HOURS", True),
+            intraday_mute_quiet_hours=_env_bool("INTRADAY_MUTE_QUIET_HOURS", False),
         )
         for name in ("polygon_api_key", "anthropic_api_key", "telegram_bot_token", "telegram_chat_id"):
             if not getattr(s, name):
