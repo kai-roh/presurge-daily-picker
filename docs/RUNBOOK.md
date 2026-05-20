@@ -181,6 +181,22 @@ python -m scripts.evaluate_intraday_signals
 
 결과는 `signal_outcomes`에 저장된다. 장중 signal 품질은 `signal_events`와 `signal_outcomes`를 조인해 본다.
 
+### 3.5 signal 리포트
+
+파라미터 자동 변경은 하지 않고, trigger/time-bucket 별 성과와 운영 추천안만 받는다.
+
+```bash
+python -m scripts.report_intraday_signals --period daily --push
+python -m scripts.report_intraday_signals --period weekly --push
+```
+
+GitHub Actions `.github/workflows/intraday_signal_report.yml`:
+
+- 일간: Tue-Sat 11:30 KST
+- 주간: Sat 12:00 KST
+
+리포트는 `signal_events`, `signal_outcomes`, `trade_log` 학습 재료가 충분히 쌓였는지 확인하고, 표본이 부족하면 파라미터 변경 보류를 권고한다.
+
 ---
 
 ## 4. 정상 동작 체크리스트

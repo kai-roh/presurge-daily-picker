@@ -1,0 +1,54 @@
+name: Intraday Signal Report
+
+on:
+  schedule:
+    - cron: "30 2 * * 2-6"     # Tue-Sat 11:30 KST, prior US session daily report
+    - cron: "0 3 * * 6"        # Sat 12:00 KST, weekly report after Friday session
+  workflow_dispatch:
+    inputs:
+      period:
+        description: "report period: daily or weekly"
+        required: false
+        default: "daily"
+
+concurrency:
+  group: intraday-signal-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Initialize schema
+        run: python -m src.storage.db --init
+
+      - name: Send intraday signal report
+        run: |
+          period="${{ github.event.inputs.period }}"
+          if [ -z "$period" ]; then
+            if [ "${{ github.event.schedule }}" = "0 3 * * 6" ]; then
+              period="weekly"
+            else
+              period="daily"
+            fi
+          fi
+          python -m scripts.report_intraday_signals --period "$period" --push

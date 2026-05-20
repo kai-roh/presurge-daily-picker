@@ -406,13 +406,15 @@ data/intraday_launchd_stderr.log
 
 - `evaluate_intraday_signals.py` 추가
 - 시그널 이후 10m/30m/60m/EOD 성과 계산
-- 주간 요약 리포트 생성
+- `report_intraday_signals.py`로 일간/주간 요약 리포트 생성
+- 리포트는 추천안만 제공하고 파라미터 자동 변경은 하지 않음
 
 완료 기준:
 
 - BUY trigger별 hit rate 산출
 - false positive trigger 식별 가능
 - 기존 daily `trade_log`와 별도로 장중 trigger 품질 추적
+- Tue-Sat 11:30 KST 일간 리포트, Sat 12:00 KST 주간 리포트 발송
 
 ### Phase 4: Threshold tuning
 
