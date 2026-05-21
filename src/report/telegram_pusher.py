@@ -20,7 +20,7 @@ class TelegramPusher:
         self.chat_id = chat_id
         self.dry_run = dry_run
 
-    def send(self, text: str, parse_mode: str = "Markdown") -> dict[str, Any]:
+    def send(self, text: str, parse_mode: str | None = "Markdown") -> dict[str, Any]:
         if self.dry_run:
             logger.info("[DRY] Telegram send (%d chars)", len(text))
             return {"ok": True, "dry_run": True}
@@ -31,9 +31,10 @@ class TelegramPusher:
             payload = {
                 "chat_id": self.chat_id,
                 "text": chunk,
-                "parse_mode": parse_mode,
                 "disable_web_page_preview": True,
             }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
             with httpx.Client(timeout=20.0) as client:
                 resp = client.post(url, json=payload)
             if resp.status_code != 200:

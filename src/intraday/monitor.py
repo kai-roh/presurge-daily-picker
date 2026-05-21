@@ -205,7 +205,10 @@ class IntradayMonitor:
             return "stored_no_telegram"
         text = format_signal_message(snap, signal)
         try:
-            TelegramPusher(self.settings.telegram_bot_token, chat_id).send(text)
+            TelegramPusher(self.settings.telegram_bot_token, chat_id).send(
+                text,
+                parse_mode=None,
+            )
         except Exception as exc:
             logger.warning("Telegram intraday push failed signal=%s: %s", signal_id, exc)
             return f"failed:{type(exc).__name__}"
